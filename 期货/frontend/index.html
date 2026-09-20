@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>商品期货 · 趋势决策台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="brand"><span class="brand-mark">↗</span> 商品期货 <span class="muted">/ 趋势决策台</span></div>
+  <nav class="top-tabs" aria-label="一级界面">
+    <button data-view="market" class="active">市场雷达</button>
+    <button data-view="candidates">候选池</button>
+    <button data-view="detail">商品详情</button>
+    <button data-view="options">T型报价</button>
+    <button data-view="positions">持仓监控</button>
+    <button data-view="alerts">预警中心</button>
+    <button data-view="review">复盘设置</button>
+  </nav>
+  <div id="data-date" class="muted">正在读取数据…</div>
+</header>
+<main id="app" class="trading-shell">
+  <section class="loading-panel">正在加载决策数据…</section>
+</main>
+<div id="error" role="alert" hidden></div>
+<script type="module" src="/app.mjs"></script>
+</body>
+</html>

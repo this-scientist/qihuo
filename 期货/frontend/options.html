@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>期权明细 · 商品期货</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-mark">↗</span> 商品期货 <span class="muted">/ 期权明细</span></div>
+  <div id="data-date" class="muted">读取数据…</div>
+</header>
+<main class="page-main option-workspace">
+  <div class="heading">
+    <div>
+      <div class="eyebrow">OPTION DETAIL</div>
+      <h1>期权明细</h1>
+      <p class="muted">承接市场雷达和T型报价，保留可做性评分、希腊值、IV、流动性、期货走势和损益情景。</p>
+    </div>
+    <div class="actions"><a class="workflow-link" href="/">返回市场雷达</a><button id="refresh-options">采集期权链</button></div>
+  </div>
+
+  <div class="notice compact-notice">默认只展示核心筛选和良好以上合约。需要调整月份身份、方向对齐、量仓、距平值或利率时，展开高级筛选。</div>
+
+  <div id="core-option-controls" class="research-controls compact-controls">
+    <label>品种<select id="option-code"><option value="all">全部品种</option></select></label>
+    <label>方向<select id="option-side"><option value="all">全部</option><option value="C">看涨认购</option><option value="P">看跌认沽</option></select></label>
+    <label>剩余天数下限<input id="min-days" type="number" value="0" min="0" step="1"></label>
+    <label>上限<input id="max-days" type="number" value="10" min="0" step="1"></label>
+    <label>只看可做性<select id="min-score"><option value="">全部（含低分）</option><option value="50">≥50 可关注</option><option value="65" selected>≥65 良好</option><option value="80">≥80 优选</option></select></label>
+    <label>排序<select id="option-sort"><option value="trade" selected>可做性优先</option><option value="expiry">到期由近到远</option><option value="vol">成交量由高到低</option><option value="oi">持仓量由高到低</option><option value="iv">IV由低到高</option></select></label>
+    <button id="apply-options" class="primary">筛选期权</button>
+  </div>
+
+  <details class="quality compact-details">
+    <summary id="advanced-option-summary">高级筛选</summary>
+    <div id="advanced-option-controls">
+      <div class="research-controls">
+        <label>月份身份<select id="option-role"><option value="all">主力与次主力</option><option value="main">主力</option><option value="secondary">次主力</option></select></label>
+        <label>方向对齐<select id="align-mode"><option value="aligned" selected>仅顺势（默认）</option><option value="all">全部（含逆趋势抄底）</option></select></label>
+        <label>最小成交量<input id="min-vol" type="number" value="0" min="0"></label>
+        <label>最小持仓量<input id="min-oi" type="number" value="0" min="0"></label>
+        <label>距平值范围（%）<input id="max-distance" type="number" value="100" min="0"></label>
+        <label>参考年利率（%）<input id="reference-rate" type="number" value="2" min="0" max="20" step="any"></label>
+      </div>
+      <div class="research-controls" aria-label="到期区间快捷选择">
+        <button id="pick-dom" class="primary">末日轮优选（0–10天）</button>
+        <button data-days="0,10">0–10天</button>
+        <button data-days="11,30">11–30天</button>
+        <button data-days="31,60">31–60天</button>
+        <button data-days="61,120">61–120天</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="quality compact-details">
+    <summary>评分口径</summary>
+    <div class="notice">可做性=标的发动机55分（趋势/突破/相对强弱/增仓等）＋期权爆发结构30分（Gamma甜区、IV贵贱、流动性）＋时间成本15分。逆趋势合约默认隐藏；如需抄底摸顶，在高级筛选里切到“全部”。</div>
+  </details>
+
+  <div id="option-error" class="page-error" role="alert"></div>
+  <div id="option-context" class="options-summary"></div>
+  <div class="section-heading"><h2>期权评分表 <span id="option-count" class="count"></span></h2><button id="export-options">导出观察结果</button></div>
+  <div class="table-wrap"><table><thead><tr><th>期权 / 标的</th><th>可做性</th><th>爆发力标签</th><th>剩余天数</th><th>参考IV</th><th>同组平均IV</th><th>成交量（手）</th><th>持仓量（手）</th></tr></thead><tbody id="option-rows"></tbody></table></div>
+
+  <section id="option-detail" class="option-detail" hidden>
+    <div class="section-heading"><h2 id="option-detail-title"></h2><button id="close-option-detail">收起</button></div>
+    <div id="option-detail-context" class="notice"></div>
+    <h3>对应期货走势 · 真实月份合约</h3><div id="option-underlying-chart"></div>
+    <h3>买方到期损益情景</h3><div class="notice">按当前日线权利金持有至到期，忽略交易费用。到期前的时间价值、IV变化和提前行权不在这个终值图中。</div><div id="payoff-chart"></div><div id="option-scenarios" class="table-wrap option-scenarios"></div>
+  </section>
+
+  <details class="quality"><summary>数据覆盖与缺失项</summary><div id="option-coverage" class="notice"></div><div id="option-limitations" class="notice"></div><p>参考IV不等于ATR、HV或供应商直接提供的IV。没有盘口，不确认买卖价差、可成交价格与滑点。</p></details>
+</main>
+<script type="module" src="/options.mjs"></script>
+</body>
+</html>

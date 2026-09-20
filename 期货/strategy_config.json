@@ -1,0 +1,12 @@
+{
+  "min_history": 280,
+  "min_universe": 20,
+  "top": 5,
+  "adx_min": 20,
+  "startup_rps": 90,
+  "trend_min": 70,
+  "startup_min": 65,
+  "startup_hits": 6,
+  "max_extension_atr": 3,
+  "min_coverage": 90
+}

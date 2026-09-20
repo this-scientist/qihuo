@@ -1,0 +1,15 @@
+.venv/
+.trae/
+__pycache__/
+期货/data/
+期货/logs/
+期货/output/
+期货/.playwright-cli/
+期货/.superpowers/
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db

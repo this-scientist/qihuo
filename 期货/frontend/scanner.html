@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>期权候选验证 · 商品期货</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-mark">↗</span> 商品期货 <span class="muted">/ 期权候选验证</span></div>
+  <div id="data-date" class="muted">读取数据…</div>
+</header>
+<main class="page-main option-workspace">
+  <div class="heading">
+    <div>
+      <div class="eyebrow">OPTION CANDIDATE CHECK</div>
+      <h1>期权候选验证</h1>
+      <p class="muted">从主流程发现机会后，用这里复核期权评分、结构分解和候选合约。</p>
+    </div>
+    <a class="workflow-link" href="/">返回市场雷达</a>
+  </div>
+
+  <div class="notice compact-notice">默认只保留做多、做空和结构复核三条路径。过度延伸、反转雷达等低频工具折叠在高级雷达里。</div>
+
+  <div class="scan-controls compact-controls" role="tablist" aria-label="扫描方向">
+    <button id="dir-long" class="active" role="tab" aria-selected="true">做多候选</button>
+    <button id="dir-short" role="tab" aria-selected="false">做空候选</button>
+    <button id="dir-structure" role="tab" aria-selected="false">结构复核</button>
+    <span id="scan-summary" class="muted small"></span>
+  </div>
+
+  <details class="quality compact-details">
+    <summary>高级雷达</summary>
+    <div id="advanced-radars" class="scan-controls" role="tablist" aria-label="高级扫描">
+      <button id="dir-extended" role="tab" aria-selected="false">过度延伸</button>
+      <button id="dir-radar" role="tab" aria-selected="false">反转雷达</button>
+    </div>
+  </details>
+
+  <div id="scan-error" class="page-error" role="alert"></div>
+  <div class="section-heading"><h2><span id="list-title">多头候选</span> <span id="list-count" class="count"></span></h2></div>
+  <div class="table-wrap" id="scan-wrap"><table><thead><tr><th>品种 / 主力</th><th>大类</th><th>爆发指数</th><th>组合信号</th><th>方向RPS20</th><th>RPS五日加速度</th><th>ADX(五日变化)</th><th>5日涨跌</th><th>OI五日</th><th>量比</th><th>IV−HV20</th><th>趋势·阶段</th><th>结构</th></tr></thead><tbody id="scan-rows"><tr><td colspan="13" class="empty">正在计算候选与合约，首次打开可能需要十几秒…</td></tr></tbody></table></div>
+  <div class="table-wrap" id="radar-wrap" hidden><table><thead><tr><th>品种 / 主力</th><th>大类</th><th>状态</th><th>警报</th><th>RPS20</th><th>RPS60</th><th>RPS120</th><th>RPS五日变化</th><th>RPS阶梯</th><th>OI五日</th><th>5日涨跌</th><th>Carry五日</th></tr></thead><tbody id="radar-rows"><tr><td colspan="12" class="empty">正在计算…</td></tr></tbody></table></div>
+  <div class="table-wrap" id="structure-wrap" hidden><table><thead><tr><th>品种 / 主力</th><th>大类</th><th>结构方向</th><th>结构分</th><th>资金(OI)</th><th>现货(基差)</th><th>跨期(月差)</th><th>曲线(期限结构)</th><th>库存</th><th>背离</th><th>价格趋势</th><th>覆盖</th></tr></thead><tbody id="structure-rows"><tr><td colspan="12" class="empty">正在计算…</td></tr></tbody></table></div>
+
+  <section id="structure-detail" class="option-detail" hidden><div class="section-heading"><h2 id="structure-title"></h2><button id="close-structure">收起</button></div>
+    <div id="structure-summary" class="options-summary"></div>
+    <h3>五维度结构分解</h3><div id="structure-grid" class="item-grid"></div>
+    <div id="structure-verdict" class="notice"></div>
+  </section>
+
+  <section id="scan-detail" class="option-detail" hidden><div class="section-heading"><h2 id="detail-title"></h2><button id="close-detail">收起</button></div>
+    <div id="detail-summary" class="options-summary"></div>
+    <h3>商品结构雷达</h3><div id="detail-structure" class="options-summary"></div>
+    <h3>爆发指数分解</h3><div id="item-grid" class="item-grid"></div>
+    <h3>十条组合信号</h3><div id="signal-list" class="signal-list"></div>
+    <h3>10倍潜力评估</h3><div id="tb-summary" class="options-summary"></div>
+    <div id="tb-grid" class="item-grid"></div>
+    <div class="table-wrap"><table><thead><tr><th>10倍候选合约</th><th>方向</th><th>行权价</th><th>剩余天</th><th>Delta</th><th>Gamma评级</th><th>参考IV</th><th>IV−HV20</th><th>IV状态</th><th>合约分/20</th><th>成交量</th><th>持仓量</th><th>流动性</th></tr></thead><tbody id="tb-rows"></tbody></table></div>
+    <h3>候选合约</h3><div id="contract-note" class="notice"></div>
+    <div class="table-wrap"><table><thead><tr><th>期权合约</th><th>档位</th><th>方向</th><th>行权价</th><th>剩余天</th><th>Delta</th><th>Gamma</th><th>Theta/日</th><th>Vega/1%</th><th>参考IV</th><th>成交量</th><th>持仓量</th></tr></thead><tbody id="contract-rows"></tbody></table></div>
+    <details class="quality compact-details"><summary>期限结构明细</summary><div id="term-note" class="notice"></div><div class="table-wrap"><table><thead><tr><th>合约</th><th>角色</th><th>交割月</th><th>距交割天数</th><th>结算价</th><th>成交量</th><th>持仓量</th></tr></thead><tbody id="term-rows"></tbody></table></div></details>
+    <div class="notice">到期损益与真实标的走势可在<a id="detail-option-link" href="#">期权明细</a>页按品种查看。</div>
+  </section>
+
+  <details class="quality"><summary>口径与限制</summary><div id="scan-notes" class="notice"></div></details>
+</main>
+<script type="module" src="/scanner.mjs"></script>
+</body>
+</html>
