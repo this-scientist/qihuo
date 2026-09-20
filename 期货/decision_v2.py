@@ -1,6 +1,7 @@
 """V2 decision layer: direction -> start -> structure -> option."""
 from collections import defaultdict
 import math
+from trend_state import classify_trend_state
 
 
 DIR_GATE = 25
@@ -171,10 +172,14 @@ def _candidate_tier(state, start):
     return 'WAIT'
 
 
-def _option_action(side, state, structure):
+def _option_action(side, state, structure, trend_gate=None):
+    if trend_gate == 'BLOCK':
+        return '不做'
     if state in {'WAIT', 'EXHAUST'} or structure == 'CONFLICT':
         return '不做'
     if state == 'PREPARE':
+        return '等待'
+    if trend_gate == 'CONDITIONAL' and state != 'TREND':
         return '等待'
     return 'Call' if side == 'long' else 'Put' if side == 'short' else '不做'
 
@@ -255,8 +260,9 @@ def build_decisions(records):
         decision['price_rps'] = decision.get('directional_rps20') if side != 'neutral' else None
         decision['structure_confirm'] = structure_confirm(decision, side)
         decision['state_v2'] = _state(decision, dir_score, decision['start_score'], decision['structure_confirm'])
+        decision.update(classify_trend_state(decision, side, decision['state_v2'], decision['start_score']))
         decision['candidate_tier'] = _candidate_tier(decision['state_v2'], decision['start_score'])
-        decision['option_action'] = _option_action(side, decision['state_v2'], decision['structure_confirm'])
+        decision['option_action'] = _option_action(side, decision['state_v2'], decision['structure_confirm'], decision.get('trend_option_gate'))
         decision['v2_active'] = decision['state_v2'] in {'START', 'TREND'}
         decision['v2_trade_allowed'] = decision['option_action'] in {'Call', 'Put'}
         decision['structure_support'] = decision['structure_confirm'] == 'SUPPORT'

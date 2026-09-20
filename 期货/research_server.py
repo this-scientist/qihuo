@@ -42,7 +42,7 @@ def phase_settings(values):
 
 def ensure_decision_payload(payload):
     payload=dict(payload)
-    if 'decisions' not in payload:
+    if 'decisions' not in payload or any('trend_state' not in row for row in payload.get('decisions',[])):
         payload['decisions']=build_decisions(payload.get('records',[]))
     payload['decision_summary']={state:sum(1 for row in payload['decisions'] if row.get('state_v2')==state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
     factors=list(payload.get('factors',[]));existing={item.get('key') for item in factors}

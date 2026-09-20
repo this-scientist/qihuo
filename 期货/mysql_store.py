@@ -124,6 +124,11 @@ SCHEMA_SQL = [
       decision_direction VARCHAR(20),
       decision_side VARCHAR(20),
       state_v2 VARCHAR(20),
+      trend_state VARCHAR(8),
+      trend_state_label VARCHAR(40),
+      trend_state_score DECIMAL(12,6),
+      trend_transition VARCHAR(40),
+      trend_option_gate VARCHAR(20),
       dir_score DECIMAL(12,6),
       start_score DECIMAL(12,6),
       price_rps DECIMAL(12,6),
@@ -136,6 +141,7 @@ SCHEMA_SQL = [
       payload_json JSON NOT NULL,
       PRIMARY KEY (trade_date, commodity_code),
       KEY idx_decision_rank (trade_date, state_v2, v2_rank),
+      KEY idx_decision_trend_state (trade_date, trend_state),
       KEY idx_decision_sector (trade_date, sector),
       KEY idx_decision_option (trade_date, option_action)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -228,6 +234,15 @@ SCHEMA_SQL = [
     """,
 ]
 
+MIGRATION_SQL = [
+    "ALTER TABLE commodity_decision_daily ADD COLUMN trend_state VARCHAR(8) AFTER state_v2",
+    "ALTER TABLE commodity_decision_daily ADD COLUMN trend_state_label VARCHAR(40) AFTER trend_state",
+    "ALTER TABLE commodity_decision_daily ADD COLUMN trend_state_score DECIMAL(12,6) AFTER trend_state_label",
+    "ALTER TABLE commodity_decision_daily ADD COLUMN trend_transition VARCHAR(40) AFTER trend_state_score",
+    "ALTER TABLE commodity_decision_daily ADD COLUMN trend_option_gate VARCHAR(20) AFTER trend_transition",
+    "ALTER TABLE commodity_decision_daily ADD INDEX idx_decision_trend_state (trade_date, trend_state)",
+]
+
 
 def ensure_database() -> None:
     cfg = mysql_config()
@@ -251,6 +266,13 @@ def ensure_schema() -> None:
         with conn.cursor() as cur:
             for sql in SCHEMA_SQL:
                 cur.execute(sql)
+            for sql in MIGRATION_SQL:
+                try:
+                    cur.execute(sql)
+                except pymysql.err.OperationalError as exc:
+                    if exc.args and exc.args[0] in {1060, 1061}:
+                        continue
+                    raise
         conn.commit()
     finally:
         conn.close()

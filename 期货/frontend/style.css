@@ -50,6 +50,11 @@ header .page-links{display:flex;gap:22px;align-items:center;font-size:13px}.page
 .focus-list span{font-size:12px;color:var(--muted)}
 .decision-table td:first-child strong{display:block}
 .status-pill{display:inline-block;border-radius:999px;padding:3px 8px;background:#eef2f6;color:#52606d;font-size:11px;font-weight:600}
+.trend-pill{display:inline-block;border-radius:5px;padding:3px 7px;background:#eef2f6;color:#52606d;font-size:11px;font-weight:700}
+.trend-t1,.trend-t2{background:#fff2d6;color:#81540e}
+.trend-t3{background:#fde9e6;color:#a7342e}
+.trend-t4{background:#e8f0ff;color:#2156a5}
+.trend-t5{background:#f1ebe4;color:#91612b}
 .state-start{background:#fde9e6;color:#a7342e}
 .state-trend{background:#e8f0ff;color:#2156a5}
 .state-prepare{background:#fff2d6;color:#81540e}
@@ -79,6 +84,17 @@ header .page-links{display:flex;gap:22px;align-items:center;font-size:13px}.page
 .option-contract.recommended{border-color:#cb524a;background:#fff1ef;color:#9b2e2b}
 .option-aligned{background:#fffafa}
 .option-faded{opacity:.42;background:#f7f8fa}
+.option-workbench{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;margin:14px 0 16px}
+.underlying-state{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.underlying-state div,.recommend-panel{background:#f8fafc;border:1px solid #e8edf3;border-radius:7px;padding:12px}
+.underlying-state span,.recommend-card span{display:block;color:var(--muted);font-size:11px;margin-bottom:6px}
+.underlying-state strong{display:block;font-size:18px;font-weight:600;margin-bottom:5px}
+.underlying-state small,.recommend-card small{display:block;color:var(--muted);font-size:11px;line-height:1.6;white-space:normal}
+.recommend-panel h3{margin:0 0 10px}
+.recommend-card{border-top:1px solid var(--line);padding:10px 0}
+.recommend-card:first-of-type{border-top:0;padding-top:0}
+.recommend-card strong{display:block;font-size:14px;margin-bottom:4px}
+.empty.mini{padding:14px;text-align:left;font-size:12px}
 .position-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .position-card{display:grid;gap:7px;text-align:left;padding:15px;border-radius:8px;background:#fff}
 .position-card span{font-size:11px;font-weight:700;letter-spacing:.8px}
@@ -95,5 +111,5 @@ header .page-links{display:flex;gap:22px;align-items:center;font-size:13px}.page
 .review-grid .wide{grid-column:1/-1}
 .settings-list{display:grid;gap:12px;margin-top:12px}
 .settings-list label{display:grid;grid-template-columns:1fr 160px;gap:10px;align-items:center}
-@media(max-width:1100px){.app-header{align-items:flex-start;flex-direction:column;padding-top:14px;padding-bottom:12px}.top-tabs{max-width:100%;width:100%}.radar-grid,.detail-layout,.review-grid{grid-template-columns:1fr}.page-hero{align-items:flex-start;flex-direction:column}.hero-actions{justify-content:flex-start}.alert-row{grid-template-columns:1fr}.alert-row small{text-align:left}}
-@media(max-width:700px){.trading-shell{padding:20px 14px}.radar-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card strong{font-size:22px}.detail-metrics{gap:12px}.structure-grid,.review-stats{grid-template-columns:1fr}.settings-list label{grid-template-columns:1fr}.top-tabs button{padding:8px}.page-hero h1{font-size:24px}.t-chain table{min-width:720px}}
+@media(max-width:1100px){.app-header{align-items:flex-start;flex-direction:column;padding-top:14px;padding-bottom:12px}.top-tabs{max-width:100%;width:100%}.radar-grid,.detail-layout,.review-grid,.option-workbench{grid-template-columns:1fr}.page-hero{align-items:flex-start;flex-direction:column}.hero-actions{justify-content:flex-start}.alert-row{grid-template-columns:1fr}.alert-row small{text-align:left}}
+@media(max-width:700px){.trading-shell{padding:20px 14px}.radar-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card strong{font-size:22px}.detail-metrics{gap:12px}.structure-grid,.review-stats,.underlying-state{grid-template-columns:1fr}.settings-list label{grid-template-columns:1fr}.top-tabs button{padding:8px}.page-hero h1{font-size:24px}.t-chain table{min-width:720px}}

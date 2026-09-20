@@ -19,6 +19,7 @@ const VIEW_TITLES={
 const STATE_LABELS={START:'启动',PREPARE:'准备观察',TREND:'趋势持有',EXHAUST:'衰竭',WAIT:'等待'};
 const DIRECTION_LABELS={LONG:'做多',SHORT:'做空',NEUTRAL:'震荡',long:'做多',short:'做空',neutral:'震荡',up:'做多',down:'做空'};
 const OPTION_ACTION_LABELS={Call:'做：买认购',Put:'做：买认沽','不做':'不做'};
+const OPTION_GATE_LABELS={ALLOW:'允许新仓',WATCH:'观察小仓',CONDITIONAL:'等待回调',BLOCK:'不新开仓'};
 const MONITOR_LABELS={HEALTHY:'正常持有',WEAKENING:'正在转弱',INVALID:'逻辑失效'};
 const STRUCTURE_LABELS={SUPPORT:'结构支持',CONFLICT:'结构冲突',NEUTRAL:'结构中性',UNKNOWN:'结构未知',backwardation:'近强远弱',contango:'近弱远强',flat:'平坦'};
 const TERM_TIPS={
@@ -28,6 +29,8 @@ const TERM_TIPS={
  vol:'量能强度：成交量相对活跃程度，越高说明资金参与越明显。',
  oi:'持仓变化：未平仓合约数量变化，用来判断新资金是否进场。',
  option:'期权动作：方向、启动和商品结构同时通过时才提示可做；否则显示不做。',
+ trend:'趋势状态：T0无趋势、T1酝酿、T2启动、T3加速、T4延续、T5衰竭。',
+ transition:'状态迁移：用当前证据近似标记从观察到启动、从启动到加速、或从延续到衰竭的变化。',
  delta:'Delta：标的价格变动1元时，期权理论价格大约变化多少。',
  strike:'行权价：期权到期时可按该价格买入或卖出标的的价格。',
  adx:'趋势强度：衡量趋势是否有力度，不直接代表方向。'
@@ -39,6 +42,7 @@ const term=(label,key)=>`${label}<span class="term-tip" title="${TERM_TIPS[key]}
 const stateText=value=>STATE_LABELS[value]||value||'等待';
 const directionText=value=>DIRECTION_LABELS[value]||value||'—';
 const optionActionText=value=>OPTION_ACTION_LABELS[value]||value||'—';
+const optionGateText=value=>OPTION_GATE_LABELS[value]||value||'—';
 const structureText=value=>STRUCTURE_LABELS[value]||value||'—';
 const rows=()=>data.decisions||data.records||[];
 const codeOf=row=>row.ts_code;
@@ -89,6 +93,8 @@ function decisionTable(source,limit=80,compact=false){
   <td><strong>${row.name}</strong><span class="contract">${row.main_code||codeOf(row)}</span></td>
   <td class="${directionClass(row)}">${directionText(row.decision_direction||row.trend_direction||row.direction)}</td>
   <td><span class="status-pill state-${String(row.state_v2||'wait').toLowerCase()}">${stateText(row.state_v2)}</span></td>
+  <td><span class="trend-pill trend-${String(row.trend_state||'t0').toLowerCase()}">${row.trend_state||'T0'}</span><span class="contract">${row.trend_state_label||'无趋势'}</span></td>
+  <td>${row.trend_transition||'—'}</td>
   <td class="${dirScore(row)>0?'up':dirScore(row)<0?'down':''}">${signed(row.dir_score)}</td>
   <td>${fmt(row.start_score??row.startup_score)}</td>
   <td>${fmt(row.price_rps??row.directional_rps20??row.rps20)}</td>
@@ -96,9 +102,9 @@ function decisionTable(source,limit=80,compact=false){
   <td>${row.oi_behavior||pct(row.oi_change5)}</td>
   <td>${structureText(row.structure_confirm||row.structure)}</td>
   <td><span class="option-decision ${row.option_action==='不做'||!row.option_action?'skip':'do'}">${optionActionText(row.option_action)}</span></td>
-  <td>${compact?'详情 / T型':`<button class="mini-action" data-action="detail" data-code="${codeOf(row)}">详情</button><button class="mini-action" data-action="options" data-code="${codeOf(row)}">T型</button>`}</td>
+ <td>${compact?'详情 / T型':`<button class="mini-action" data-action="detail" data-code="${codeOf(row)}">详情</button><button class="mini-action" data-action="options" data-code="${codeOf(row)}">T型</button>`}</td>
  </tr>`).join('');
- return `<div class="table-wrap"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>方向</th><th>状态</th><th>${term('方向分','dir')}</th><th>${term('启动分','start')}</th><th>${term('相对强弱','rps')}</th><th>${term('量能强度','vol')}</th><th>${term('持仓变化','oi')}</th><th>商品结构</th><th>${term('期权动作','option')}</th><th>操作</th></tr></thead><tbody>${body||'<tr><td colspan="11" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
+ return `<div class="table-wrap"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>方向</th><th>状态</th><th>${term('趋势状态','trend')}</th><th>${term('状态迁移','transition')}</th><th>${term('方向分','dir')}</th><th>${term('启动分','start')}</th><th>${term('相对强弱','rps')}</th><th>${term('量能强度','vol')}</th><th>${term('持仓变化','oi')}</th><th>商品结构</th><th>${term('期权动作','option')}</th><th>操作</th></tr></thead><tbody>${body||'<tr><td colspan="13" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
 }
 function renderMarket(){
  const leaders=sortedRows().slice(0,3);
@@ -114,13 +120,13 @@ function renderCandidates(){
  app.innerHTML=header()+`<section class="decision-panel"><div class="candidate-tabs">${tabs.map(tab=>`<button data-candidate-tab="${tab}" class="${state.candidateTab===tab?'active':''}">${stateText(tab)}<span>${rows().filter(row=>row.state_v2===tab).length}</span></button>`).join('')}</div>${decisionTable(source)}</section>`;
 }
 function metricBlocks(row){
- const items=[['方向结论',directionText(row.decision_direction||row.trend_direction)],['状态',stateText(row.state_v2)],['方向分',signed(row.dir_score)],['启动分',fmt(row.start_score??row.startup_score)],['相对强弱',fmt(row.price_rps??row.directional_rps20??row.rps20)],['量能强度',fmt(row.vol_rps??row.volume_ratio)],['持仓变化',row.oi_behavior||pct(row.oi_change5)],['商品结构',structureText(row.structure_confirm||row.structure)],['期权动作',optionActionText(row.option_action)],['趋势强度',fmt(row.adx)]];
+ const items=[['方向结论',directionText(row.decision_direction||row.trend_direction)],['状态',stateText(row.state_v2)],['趋势状态',`${row.trend_state||'T0'} · ${row.trend_state_label||'无趋势'}`],['状态迁移',row.trend_transition||'—'],['趋势评分',fmt(row.trend_state_score)],['期权闸门',optionGateText(row.trend_option_gate)],['方向分',signed(row.dir_score)],['启动分',fmt(row.start_score??row.startup_score)],['相对强弱',fmt(row.price_rps??row.directional_rps20??row.rps20)],['量能强度',fmt(row.vol_rps??row.volume_ratio)],['持仓变化',row.oi_behavior||pct(row.oi_change5)],['商品结构',structureText(row.structure_confirm||row.structure)],['期权动作',optionActionText(row.option_action)],['趋势强度',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div>`;
 }
 function renderDetail(){
  const row=selectedRow();
  app.innerHTML=header()+`<section class="detail-layout">
-  <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${metricBlocks(row)}<p class="phase-rationale">${row.phase_reason||'暂无阶段说明。'} V2按方向闸门、启动证据、商品结构和期权表达顺序给出当前动作。</p></article>
+  <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||row.phase_reason||'暂无阶段说明。'} V2按方向闸门、T0-T5趋势状态、启动证据、商品结构和期权表达顺序给出当前动作。</p></article>
   <article class="decision-panel chart-card"><div class="section-heading"><h2>K线与多周期</h2><div class="timeframe-tabs"><span>D1</span><span>60m</span><span>15m</span><span>5m</span></div></div><div id="single-chart"></div></article>
   <article class="decision-panel"><h2>趋势 + 资金</h2>${metricBlocks(row)}</article>
   <article class="decision-panel"><h2>商品结构</h2><div class="structure-grid"><div><span>期限结构</span><strong>${structureText(row.structure)}</strong></div><div><span>结构确认</span><strong>${structureText(row.structure_confirm)}</strong></div><div><span>价差变化</span><strong>${pct(row.spread_change5)}</strong></div><div><span>持有成本变化</span><strong>${pct(row.carry_change5)}</strong></div></div></article>
@@ -166,12 +172,31 @@ function optionCell(item,hot){
  const score=item.tradability?.score;
  return `<button class="option-contract ${hot?'recommended':''}" title="${item.ts_code}">${item.ts_code}<span>权利金 ${fmt(item.premium)} · 分 ${score??'—'}</span></button>`;
 }
+function optionCandidates(row,chain){
+ const side=optionTargetSide(row);
+ const candidates=(chain.records||[]).filter(item=>(item.main_code===codeOf(row)||item.underlying_code===row.main_code||item.underlying_code===row.secondary_code)&&item.call_put===side&&item.tradability?.counter_trend!==true);
+ const inBand=item=>Number.isFinite(item.days_to_expiry)&&item.days_to_expiry>=7&&item.days_to_expiry<=45&&Number.isFinite(item.delta)&&Math.abs(item.delta)>=.1&&Math.abs(item.delta)<=.6;
+ return candidates.filter(inBand).sort((a,b)=>(b.tradability?.score??-1)-(a.tradability?.score??-1)||Math.min(b.vol||0,b.oi||0)-Math.min(a.vol||0,a.oi||0)).slice(0,3);
+}
+function recommendationType(item,index){
+ const d=Math.abs(item.delta||0);
+ if(d>=.45)return '稳健型';
+ if(d>=.25)return '平衡型';
+ if(d>=.1)return '激进型';
+ return ['稳健型','平衡型','激进型'][index]||'候选';
+}
+function optionContextPanel(row,chain){
+ const picks=optionCandidates(row,chain);
+ const gate=row.trend_option_gate;
+ const gateText=gate==='BLOCK'?'当前趋势状态不推荐新开买方期权。':gate==='CONDITIONAL'?'趋势已进入延续段，优先等待回调后二次启动。':gate==='WATCH'?'趋势仍在酝酿，适合小仓观察或等待T2确认。':'趋势窗口允许顺势筛选。';
+ return `<div class="option-workbench"><section class="underlying-state"><div><span>标的趋势</span><strong>${directionText(row.decision_direction)} · ${row.trend_transition||row.trend_state||'T0'}</strong><small>${row.trend_state_label||'无趋势'} · 趋势评分 ${fmt(row.trend_state_score)} · ${gateText}</small></div><div><span>RPS / ADX / OI</span><strong>${fmt(row.price_rps??row.directional_rps20??row.rps20)} / ${fmt(row.adx)} / ${row.oi_behavior||pct(row.oi_change5)}</strong><small>${row.trend_state_reason||row.phase_reason||''}</small></div></section><section class="recommend-panel"><h3>系统候选</h3>${picks.length?picks.map((item,index)=>`<div class="recommend-card"><span>${recommendationType(item,index)}</span><strong>${item.ts_code}</strong><small>分 ${item.tradability?.score??'—'} · Delta ${fmt(item.delta)} · DTE ${item.days_to_expiry} · IV ${fmt(item.iv_reference)} · 量/仓 ${fmt(item.vol)}/${fmt(item.oi)}</small></div>`).join(''):'<div class="empty mini">当前无满足7-45天、顺势、Delta与可做性条件的候选。</div>'}</section></div>`;
+}
 async function renderOptions(){
  const row=selectedRow();
  app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">方向侧高亮，反向侧灰显；合约筛选按敏感度区间执行。</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div><div class="loading-panel">正在读取期权链…</div></section>`;
  const chain=await ensureOptions();
  if(state.view!=='options')return;
- app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">${chain.status||'期权链'} · 当前模式 ${optionModeRange()[2]}</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div><div class="table-wrap t-chain"><table><thead><tr><th>认购</th><th>${term('敏感度','delta')}</th><th>${term('行权价','strike')}</th><th>${term('敏感度','delta')}</th><th>认沽</th></tr></thead><tbody>${optionRows(row,chain)}</tbody></table></div></section>`;
+ app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">${chain.status||'期权链'} · 当前模式 ${optionModeRange()[2]}</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div>${optionContextPanel(row,chain)}<div class="table-wrap t-chain"><table><thead><tr><th>认购</th><th>${term('敏感度','delta')}</th><th>${term('行权价','strike')}</th><th>${term('敏感度','delta')}</th><th>认沽</th></tr></thead><tbody>${optionRows(row,chain)}</tbody></table></div></section>`;
 }
 function monitorState(row){
  if(row.state_v2==='START'||row.state_v2==='TREND')return 'HEALTHY';
@@ -237,7 +262,7 @@ function wireView(){
  document.querySelectorAll('.decision-table').forEach(enableTableSorting);
 }
 function csvFor(source){
- const fields=['ts_code','name','sector','main_code','decision_direction','state_v2','dir_score','start_score','price_rps','vol_rps','oi_change5','structure_confirm','option_action'];
+ const fields=['ts_code','name','sector','main_code','decision_direction','state_v2','trend_state','trend_transition','trend_state_score','trend_option_gate','dir_score','start_score','price_rps','vol_rps','oi_change5','structure_confirm','option_action'];
  return '\ufeff'+[fields.join(','),...source.map(row=>fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`).join(','))].join('\r\n');
 }
 async function init(){

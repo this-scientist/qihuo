@@ -189,9 +189,10 @@ def import_payload(conn, payload: dict) -> dict[str, int]:
             """
             REPLACE INTO commodity_decision_daily
               (trade_date, commodity_code, name, sector, main_code, decision_direction, decision_side, state_v2,
+               trend_state, trend_state_label, trend_state_score, trend_transition, trend_option_gate,
                dir_score, start_score, price_rps, vol_rps, oi_change_rps, oi_behavior, structure_confirm,
                option_action, v2_rank, payload_json)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             [
                 (
@@ -203,6 +204,11 @@ def import_payload(conn, payload: dict) -> dict[str, int]:
                     scalar(row, "decision_direction"),
                     scalar(row, "decision_side"),
                     scalar(row, "state_v2"),
+                    scalar(row, "trend_state"),
+                    scalar(row, "trend_state_label"),
+                    scalar(row, "trend_state_score"),
+                    scalar(row, "trend_transition"),
+                    scalar(row, "trend_option_gate"),
                     scalar(row, "dir_score"),
                     scalar(row, "start_score"),
                     scalar(row, "price_rps"),
@@ -402,7 +408,7 @@ def main() -> int:
     os.environ["MYSQL_READ_CACHE"] = "0"
     ensure_schema()
     store = ResearchStore(args.data_dir, asof)
-    payload = read_snapshot(args.data_dir, asof)
+    payload = store.get(asof)
     option_payload = store.option_payload(asof)
 
     conn = connect()

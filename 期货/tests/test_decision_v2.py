@@ -54,6 +54,8 @@ class DecisionV2Tests(unittest.TestCase):
         self.assertGreaterEqual(decision['dir_score'], 50)
         self.assertEqual(decision['decision_side'], 'long')
         self.assertEqual(decision['state_v2'], 'TREND')
+        self.assertEqual(decision['trend_state'], 'T4')
+        self.assertEqual(decision['trend_option_gate'], 'CONDITIONAL')
         self.assertEqual(decision['option_action'], 'Call')
 
     def test_strong_short_allows_only_put(self):
@@ -67,6 +69,7 @@ class DecisionV2Tests(unittest.TestCase):
 
         self.assertLessEqual(decision['dir_score'], -50)
         self.assertEqual(decision['decision_side'], 'short')
+        self.assertEqual(decision['trend_state'], 'T4')
         self.assertEqual(decision['option_action'], 'Put')
 
     def test_neutral_direction_waits_without_option(self):
@@ -79,6 +82,8 @@ class DecisionV2Tests(unittest.TestCase):
 
         self.assertEqual(decision['decision_side'], 'neutral')
         self.assertEqual(decision['state_v2'], 'WAIT')
+        self.assertEqual(decision['trend_state'], 'T0')
+        self.assertEqual(decision['trend_option_gate'], 'BLOCK')
         self.assertEqual(decision['option_action'], '不做')
 
     def test_breakout_volume_oi_and_adx_switch_prepare_to_start(self):
@@ -94,6 +99,8 @@ class DecisionV2Tests(unittest.TestCase):
 
         self.assertGreaterEqual(decision['start_score'], 70)
         self.assertEqual(decision['state_v2'], 'START')
+        self.assertEqual(decision['trend_state'], 'T2')
+        self.assertEqual(decision['trend_transition'], 'T1→T2')
         self.assertEqual(decision['candidate_tier'], 'ACTIVE')
 
     def test_exhaustion_does_not_flip_into_reverse_trade(self):
@@ -107,6 +114,8 @@ class DecisionV2Tests(unittest.TestCase):
 
         self.assertEqual(decision['decision_side'], 'long')
         self.assertEqual(decision['state_v2'], 'EXHAUST')
+        self.assertEqual(decision['trend_state'], 'T5')
+        self.assertEqual(decision['trend_option_gate'], 'BLOCK')
         self.assertEqual(decision['option_action'], '不做')
 
 
