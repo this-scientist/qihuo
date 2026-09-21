@@ -6,9 +6,14 @@ import hashlib
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pymysql
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def mysql_config() -> dict[str, Any]:
@@ -306,3 +311,43 @@ def cache_get(trade_date: str, cache_key: str) -> Any | None:
             return json.loads(value) if isinstance(value, str) else value
     finally:
         conn.close()
+
+
+def cache_dates(cache_key: str = "api:data") -> list[dict[str, Any]]:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT trade_date, payload_hash, generated_at
+                FROM api_cache
+                WHERE cache_key=%s
+                ORDER BY trade_date DESC
+                """,
+                (cache_key,),
+            )
+            return [
+                dict(
+                    asof=row["trade_date"],
+                    data_hash=row["payload_hash"],
+                    generated_at=row["generated_at"].isoformat(timespec="seconds")
+                    if hasattr(row["generated_at"], "isoformat")
+                    else str(row["generated_at"]),
+                )
+                for row in cur.fetchall()
+            ]
+    finally:
+        conn.close()
+
+
+def cache_latest_date(cache_key: str = "api:data") -> str | None:
+    dates = cache_dates(cache_key)
+    return dates[0]["asof"] if dates else None
+
+
+def mysql_ready() -> bool:
+    try:
+        ensure_schema()
+        return True
+    except Exception:
+        return False

@@ -5,7 +5,7 @@ import threading
 import uuid
 import shutil
 import os
-from datetime import datetime
+from datetime import datetime,timedelta
 from dataclasses import asdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,7 +18,7 @@ from trend_phases import PhaseSettings
 from snapshot_store import publish_snapshot,read_snapshot,list_snapshots,snapshot_source
 
 def mysql_cache_enabled():
-    return os.getenv('MYSQL_READ_CACHE','0').lower() in {'1','true','yes','on'}
+    return os.getenv('MYSQL_READ_CACHE','1').lower() in {'1','true','yes','on'}
 
 def mysql_cache_get(asof,key):
     if not mysql_cache_enabled():
@@ -29,9 +29,54 @@ def mysql_cache_get(asof,key):
     except Exception:
         return None
 
+def mysql_cache_put(asof,key,payload):
+    try:
+        from mysql_store import cache_set, connect, ensure_schema
+        ensure_schema()
+        conn=connect()
+        try:
+            cache_set(conn,asof,key,payload);conn.commit()
+        except Exception:
+            conn.rollback();raise
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        return False
+
+def mysql_cached_dates():
+    try:
+        from mysql_store import cache_dates
+        return cache_dates('api:data')
+    except Exception:
+        return []
+
+def mysql_latest_asof():
+    dates=mysql_cached_dates()
+    return dates[0]['asof'] if dates else None
+
 def valid_date(value):
     if not isinstance(value,str) or len(value)!=8 or not value.isdigit():raise ValueError('日期必须为YYYYMMDD')
     datetime.strptime(value,'%Y%m%d');return value
+
+def default_asof():
+    now=datetime.now()
+    closed=now if now.hour>=17 else now-timedelta(days=1)
+    return closed.strftime('%Y%m%d')
+
+def empty_payload(asof):
+    return ensure_decision_payload(dict(
+        asof=asof,
+        records=[],
+        decisions=[],
+        names={},
+        sectors={},
+        curves={},
+        moving={},
+        factors=[],
+        quality=dict(success=False,reason='数据库暂无该日期数据，请选择日期后点击“更新行情”。'),
+        data_hash='empty',
+    ))
 
 def phase_settings(values):
     settings=PhaseSettings(**values)
@@ -57,15 +102,15 @@ class ResearchStore:
         self.root=Path(root);self.lock=threading.RLock();self.job={'status':'idle'};self.active=asof;self.option_cache={}
         phase_path=self.root/'quality/phase_settings.json'
         self.phase=phase_settings(json.loads(phase_path.read_text(encoding='utf-8'))) if phase_path.exists() else PhaseSettings()
-        archive=self.root/f'processed/dashboard/{asof}.json'
-        self.payload=ensure_decision_payload(read_snapshot(self.root,asof) if archive.exists() or archive.with_suffix('.bundle.json').exists() else publish_snapshot(self.root,build_payload(self.root,asof,self.phase),self.root))
+        cached=mysql_cache_get(asof,'api:data')
+        self.payload=ensure_decision_payload(cached) if cached is not None else empty_payload(asof)
         self._persist_state()
     def _persist_state(self):atomic_json(dict(active=self.active,job=self.job),self.root/'quality/dashboard_state.json')
     def get(self,asof=None):
         asof = asof or self.active
         cached=mysql_cache_get(asof,'api:data')
         if cached is not None:return ensure_decision_payload(cached)
-        with self.lock:return self.payload if asof==self.active else ensure_decision_payload(read_snapshot(self.root,asof))
+        with self.lock:return self.payload if asof==self.active else empty_payload(asof)
     def begin(self,kind,request):
         with self.lock:
             if self.job['status'] in ['queued','running']:raise ValueError('已有任务运行，请等待完成')
@@ -73,7 +118,7 @@ class ResearchStore:
             if kind=='update':
                 now=datetime.now()
                 if asof>now.strftime('%Y%m%d') or asof==now.strftime('%Y%m%d') and now.hour<17:raise ValueError('只能更新已收盘日期；当日17点后开放')
-            elif asof!=self.active:read_snapshot(self.root,asof)
+            elif asof!=self.active and mysql_cache_get(asof,'api:data') is None:raise DataError('数据库暂无该日期数据，请先更新行情')
             self.job=dict(id=uuid.uuid4().hex,kind=kind,asof=asof,status='queued',message='等待执行',started_at=datetime.now().isoformat(timespec='seconds'))
             self._persist_state();threading.Thread(target=self._worker,args=(kind,asof,request),daemon=True).start();return dict(self.job)
     def progress(self,message):
@@ -86,14 +131,14 @@ class ResearchStore:
                 from focused import run_focused
                 from history import prepare_history
                 source=self.root/'updates'/asof;collector=make_collector(root=source)
-                self.progress('采集五交易所主力与次主力；旧快照继续可用')
+                self.progress('采集五交易所主力与次主力；旧数据库数据继续可用')
                 result=run_focused(collector,asof,asof,bool(request.get('force',False)))
                 if not result['success'] or asof not in result['published_days']:raise DataError('日期休市或采集不完整，保留原快照')
                 self.progress('补齐历史与换月校正')
                 prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
-                self.progress('验证指标并发布快照');self.copy_supplements(source);payload=build_payload(source,asof,self.phase)
-                if not payload['quality']['success']:raise DataError('有效篮子不足，保留原快照')
-                payload=publish_snapshot(self.root,payload,source)
+                self.progress('验证指标并写入数据库');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
+                if not payload['quality']['success']:raise DataError('有效篮子不足，保留原数据库数据')
+                if not mysql_cache_put(asof,'api:data',payload):raise DataError('写入 MySQL 失败，请检查数据库连接')
                 with self.lock:self.active,self.payload=asof,ensure_decision_payload(payload)
             elif kind=='reload':
                 source=self.root/'reloads'/uuid.uuid4().hex
@@ -135,7 +180,11 @@ class ResearchStore:
         if not path.exists():return dict(asof=asof,records=[],coverage=[],failures=[],status='尚未采集该日期期权数据')
         from option_analysis import option_metrics
         import numpy as np
-        result=json.loads(path.read_text(encoding='utf-8'));records=[];hv={};source=snapshot_source(self.root,asof)
+        result=json.loads(path.read_text(encoding='utf-8'));records=[];hv={}
+        try:
+            source=snapshot_source(self.root,asof)
+        except DataError:
+            source=self.root
         for record in result['records']:
             if record['underlying_code'] not in hv:
                 value={'hv20':None,'hv60':None}
@@ -178,7 +227,7 @@ class ResearchStore:
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--asof');parser.add_argument('--data-dir',type=Path,default=DATA_DIR);parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
     state=args.data_dir/'quality/dashboard_state.json'
-    asof=args.asof or (json.loads(state.read_text(encoding='utf-8'))['active'] if state.exists() else json.loads((args.data_dir/'quality/history_run.json').read_text(encoding='utf-8'))['asof'])
+    asof=args.asof or (json.loads(state.read_text(encoding='utf-8'))['active'] if state.exists() else mysql_latest_asof() or default_asof())
     store=ResearchStore(args.data_dir,valid_date(asof));frontend=Path(__file__).with_name('frontend')
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*params,**kwargs):super().__init__(*params,directory=str(frontend),**kwargs)
@@ -189,7 +238,7 @@ def main():
             try:
                 asof=valid_date(params['asof'][0]) if 'asof' in params else store.active
                 if parsed.path=='/api/data':self.respond(store.get(asof))
-                elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=list_snapshots(store.root)))
+                elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=mysql_cached_dates()))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))
                 elif parsed.path=='/api/scanner':
