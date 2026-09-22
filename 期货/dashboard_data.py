@@ -9,10 +9,11 @@ from collector import read_csv
 from trend_phases import PhaseSettings, phase_for_row, enrich_technical
 from historical_validation import historical_panels
 from dataclasses import asdict
-from decision_v2 import build_decisions
+from decision_v2 import build_decisions, unify_records
+from trend_model import MODEL_VERSION
 
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
-PERCENT_FIELDS = {'return5','return20','return60','return120','slope20','slope60','slope120',
+PERCENT_FIELDS = {'return1','return5','return20','return60','return120','slope20','slope60','slope120',
     'trend_spread','trend_spread_change5','atr_change5','oi_change5','oi_change20',
     'main_oi_change5','main_oi_change20','secondary_oi_change5','secondary_oi_change20',
     'rollover_absorption5','carry_annualized','carry_change5','carry_change20','spread_pct'}
@@ -57,6 +58,15 @@ LABELS = {
     'ma20':('MA20','价格 / 均线',''), 'ma60':('MA60','价格 / 均线',''), 'ma120':('MA120','价格 / 均线',''),
     'return20':('20日涨跌幅','价格 / 均线','%'), 'return60':('60日涨跌幅','价格 / 均线','%'), 'return120':('120日涨跌幅','价格 / 均线','%'),
     'return5':('5日涨跌幅','价格 / 均线','%'),
+    'return1':('1日收盘涨跌幅','价格 / 均线','%'),
+    'day_change':('当日涨跌幅（昨结）','价格 / 均线','%'),
+    'rps5':('RPS5','相对强弱',''),
+    'rps_accel':('RPS20五日变化','相对强弱','百分点'),
+    'pair_oi':('固定主次合计持仓','量仓 / 结构','手'),
+    'main_oi':('主力持仓','量仓 / 结构','手'),
+    'secondary_oi':('次主力持仓','量仓 / 结构','手'),
+    'burst_score':('标的爆发指数','统一趋势','分'),
+    'burst_coverage':('爆发因子覆盖率','统一趋势','%'),
     'slope20':('MA20五日斜率','价格 / 均线','%'), 'slope60':('MA60五日斜率','价格 / 均线','%'), 'slope120':('MA120五日斜率','价格 / 均线','%'),
     'trend_spread':('MA20 / MA120发散度','价格 / 均线','%'), 'trend_spread_change5':('发散度五日变化','价格 / 均线','百分点'),
     'ma_spread_atr_change5':('均线ATR发散五日变化','价格 / 均线','ATR'),
@@ -99,7 +109,8 @@ BOOLEAN_FIELDS |= {'v2_active','v2_trade_allowed','structure_support'}
 def build_payload(root, asof,phase_settings=None):
     root = Path(root)
     quality, _ = screen(root, asof)
-    _, histories, exclusions, _ = load_inputs(root, asof, Settings())
+    selected, histories, exclusions, _ = load_inputs(root, asof, Settings())
+    snapshot = selected[selected.role.eq('main')].set_index('main_code').to_dict('index')
     common = sorted(set.intersection(*(set(h.trade_date) for h in histories.values())))[-251:]
     curves, moving = {}, {}
     for code, table in histories.items():
@@ -120,6 +131,12 @@ def build_payload(root, asof,phase_settings=None):
     factors = [dict(key=key,label=value[0],group=value[1],unit=value[2],type='boolean' if key in BOOLEAN_FIELDS else 'number') for key,value in LABELS.items()]
     for record in records:
         record['name'], record['sector'] = names[record['ts_code']], classify(record['ts_code'])
+        bar = snapshot.get(record['ts_code'], {})
+        pre_settle, close = bar.get('pre_settle'), bar.get('close')
+        record['day_change'] = ((float(close)/float(pre_settle)-1)*100
+                                if pd.notna(close) and pd.notna(pre_settle) and pre_settle > 0 else None)
+        record['main_oi'] = float(bar['oi']) if pd.notna(bar.get('oi')) else None
+        record['trader_positions'] = None
         record.update(phases[record['ts_code']]);record['phase_match']=record['trend_direction']==record['direction']
         record['technical_start']=record['technical_start'] and record['phase_match']
     from supplements import supplement_context
@@ -142,9 +159,10 @@ def build_payload(root, asof,phase_settings=None):
         record['curve'] = rows
         record['curvature'] = curvature(rows[0]['settle'],rows[1]['settle'],rows[2]['settle']) if len(rows)>=3 else None
     decisions = build_decisions(records)
+    unify_records(records, decisions)
     decision_summary = {state: sum(1 for row in decisions if row['state_v2'] == state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving,
-        decisions=decisions, decision_summary=decision_summary,
+        decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=aggregate_curves(curves), factors=factors, quality=quality, exclusions=exclusions,
         phase_settings=asdict(phase_settings),supplemental_status=supplemental_status,
         scope='主次合约OI保持固定月对口径；外部全品种OI、现货/基差独立列示来源和覆盖', curve_scope='复权主连；大类为当前有效成分等权对比指数，非交易所指数')

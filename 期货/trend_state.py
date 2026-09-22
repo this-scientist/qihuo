@@ -150,13 +150,13 @@ def classify_trend_state(row: dict, side: str | None, state_v2: str | None, star
         reason = "趋势仍在但出现过度延伸、ADX/OI/价格推进衰减或旧趋势走弱，不再推荐新开买方仓。"
     elif accelerating:
         state, transition, gate = "T3", "T2→T3", "ALLOW"
-        reason = "RPS、ADX、ATR/量能与增仓同向加速，进入买方期权 Gamma 爆发区。"
+        reason = "方向RPS、ADX、波动扩张与增仓同向增强；标的进入加速阶段，期权需另看估值与期限。"
     elif state_v2 == "START" or (breakout and start >= 70 and adx >= 20 and di_gap > 0):
         state, transition, gate = "T2", "T1→T2", "ALLOW"
         reason = "关键位突破、ADX/DI确认且启动证据足够，新趋势正式形成。"
     elif state_v2 == "TREND" or phase in {"持续趋势", "中短期强势"} or _truthy(row.get("confirmed")):
         state, transition, gate = "T4", "T3→T4", "CONDITIONAL"
-        reason = "趋势成熟并仍保持同向结构，适合持有或等待回调后的二次启动。"
+        reason = "价格趋势延续；商品结构与期权条件单独评估。"
     elif state_v2 == "PREPARE" or phase == "方向形成" or start >= 50 or (rps >= 60 and adx_slope > 0 and di_gap > 0):
         state, transition, gate = "T1", "T0→T1", "WATCH"
         reason = "平衡正在被打破，RPS/ADX/DI/OI已有酝酿迹象，但尚未完成正式启动。"

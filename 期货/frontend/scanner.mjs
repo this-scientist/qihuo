@@ -18,7 +18,7 @@ const SIGNAL_LABELS=(direction,m={})=>{
  iv_not_hot:'⑨ IV未过热（≤HV1.3倍且≤60）',liquidity_ok:'⑩ 期权流动性（量仓≥1000）'}};
 const pct=value=>value==null?'—':`${value>=0?'+':''}${Number(value).toFixed(2)}%`;
 const GLOSSARY={
- '爆发指数':'0–100综合分：RPS、ADX、突破、持仓、成交、期限结构、IV、期权流动性十项加权（缺失项归一）。分数越高=趋势爆发条件越齐。',
+ '期权综合分':'0–100规则分：标的证据、期限结构、IV与期权流动性十项加权，缺失项归一；不同于总览的标的爆发指数，不代表胜率。',
  '组合信号':'十条多空条件成立的条数，分母只计有数据的条件；8条以上才值得重仓研究，★=四重共振同时成立。',
  '方向RPS20':'该品种近20日涨跌幅在全市场的百分位名次（做空已翻转为100−原始值）。≥90=最强/最弱的10%，且方向与交易一致才有意义。',
  'RPS五日加速度':'RPS20比5个交易日前变化了多少：多头为正、空头为负且幅度大，代表相对强度正朝交易方向加速。',
@@ -106,7 +106,7 @@ const GLOSSARY={
  '结构':'商品市场独有的第二套雷达：结构与价格趋势一致时给"强/中/弱"质量；结构方向与价格趋势相反且结构分≥55时显示"多/空头酝酿"（供需先变、价格未动）。',
  '结构方向':'结构面（资金/现货/跨期/曲线）综合占优的方向，独立于价格趋势方向；两者相反时即为"背离"。',
  '结构分':'五维度按可用项归一后的0–100分：多头结构分与空头结构分分别计算，高者且高出≥10分才算占优。',
- '资金(OI)':'价格方向×持仓变化的资金性质：价涨仓增=新多进入（真资金），价涨仓减=空头平仓（一次性买盘），价跌仓增=新空进入，价跌仓减=多头撤退。',
+ '资金(OI)':'价格方向与固定月对持仓变化的组合：增仓上涨、减仓上涨、增仓下跌、减仓下跌。总OI不识别净多空或开平仓者身份。',
  '现货(基差)':'现货价与基差变化是否同向确认期货趋势：两者同向=现货真实性确认（满分10），仅一项同向给5分；需导入fundamentals.csv，否则缺失。',
  '跨期(月差)':'近远月价差的变化方向：价差走扩=近端转紧（利多），收窄=近端转松（利空）；当前价差符号同向再加2分。',
  '曲线(期限结构)':'整条曲线的定价：Backwardation（近强远弱）=市场交易短缺，Contango（近弱远强）=过剩；Carry动量同向+2、五日拐点+2。',
@@ -149,7 +149,7 @@ function renderList(){
  const list=rows();
  $('list-title').textContent=TAB_TITLES[direction]??'候选';
  $('list-count').textContent=`${list.length}个`;
- $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'爆发指数=十项加权（缺失模块按可用权重归一）· 组合信号为满足/适用条数';
+ $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'期权综合分 · 标的证据、IV与合约流动性';
  const body=$('scan-rows');body.replaceChildren();
  list.forEach(record=>{
   const tr=document.createElement('tr');tr.dataset.code=record.ts_code;tr.tabIndex=0;
@@ -212,7 +212,7 @@ function renderDetail(){
  $('detail-title').textContent=`${record.name} · ${record.ts_code} · ${dir==='long'?'做多':'做空'}`;
  const m=record.metrics;
  $('detail-summary').replaceChildren();
- [['爆发指数',fmt(record.explosion_score)],['组合信号',`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`],
+ [['期权综合分',fmt(record.explosion_score)],['组合信号',`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`],
   ['趋势阶段',phaseText(record)],['阶段持续',record.phase_age==null?'—':`${record.phase_age}个交易日`],['阶段原因',record.phase_reason??'—'],
   ['原版趋势分',fmt(record.trend_score)],['原版启动分',fmt(record.startup_score)],
   ['启动命中',`${record.startup_hits}/9`],['方向RPS20',fmt(m.rps20)],['RPS加速度',signed(m.rps_accel)],['偏离MA20',`${fmt(m.extension_atr)} ATR`],['ATR分位',m.atr_percentile==null?'—':fmt(m.atr_percentile)],
@@ -286,7 +286,7 @@ function dimText(d){
 function structureEntries(s){
  return [['结构方向',s.dominant?STRUCT_DIR_TEXT[s.dominant]:'中性混合'],
   ['结构分',`偏多 ${fmt(s.long_score)} / 偏空 ${fmt(s.short_score)}`],
-  ['结构质量',s.quality??'—'],['背离',s.divergence??'—'],['覆盖',`${s.coverage}/5`],
+  ['结构质量',s.quality??'—'],['背离',s.divergence??'—'],['覆盖',`${s.effective_groups??0}/4 组`],
   ...DIM_LABELS.map(([key,label])=>[label,dimText(s[key])])];
 }
 function fillSummary(container,entries){
@@ -309,10 +309,10 @@ function renderStructureDetail(s){
   else{status.textContent=dimText(d);status.className=d.direction&&d.direction===s.trend_direction?'pass':'fail'}
   div.append(text,status);grid.appendChild(div)});
  const parts=[];
- if(s.divergence)parts.push(`${s.divergence}：资金/现货/跨期/曲线已偏向${STRUCT_DIR_TEXT[s.dominant]}，但价格趋势仍为${DIR_TEXT[s.trend_direction]??'未确认'}——供需结构先变、价格尚未确认，属于提前观察区，不是入场信号。`);
- else if(s.quality)parts.push(`结构面与价格趋势（${DIR_TEXT[s.trend_direction]??'—'}）方向一致，结构质量${s.quality}${s.quality==='强'?'：资金与供需支持这波趋势延续。':s.quality==='中'?'：结构部分支持，需继续观察资金与月差能否跟进。':'：结构支撑不足，趋势持续性存疑，追单需谨慎。'}`);
+ if(s.dominant&&s.trend_direction!=='neutral'&&s.dominant!==s.trend_direction)parts.push(`结构${STRUCT_DIR_TEXT[s.dominant]}，价格趋势${DIR_TEXT[s.trend_direction]??'未确认'}，两者背离；背离不等于价格即将反转。`);
+ else if(s.dominant&&s.quality)parts.push(`结构面与价格趋势（${DIR_TEXT[s.trend_direction]??'—'}）同向，结构质量${s.quality}。`);
  else parts.push('价格趋势尚未明确，结构面作为独立参考，等待价格趋势雷达确认。');
- parts.push(`覆盖 ${s.coverage}/5 个维度，缺失维度不计入可用分；现货/基差需导入 fundamentals.csv，库存当前未接入。`);
+ parts.push(`有效 ${s.effective_groups??0}/4 组，月差与Carry合并计分；缺失组不计入可用分。`);
  $('structure-verdict').textContent=parts.join(' ');
 }
 function renderStructure(){

@@ -23,10 +23,9 @@ SIGNAL_KEYS = ['rps_top', 'rps_rise', 'adx_turn', 'breakout', 'oi_up', 'volume_u
     'inventory', 'term', 'iv_not_hot', 'liquidity_ok']
 EXTENSION_NOTE = '过度延伸=方向已确认但偏离MA20超过阈值（默认3ATR）：趋势仍强但追单风险高，重点观察回调介入或衰竭，不适合作为启动买点。'
 RADAR_NOTE = '反转雷达在方向扫描之外单独识别"原趋势内部先恶化→新趋势扩散确认"的品种：警报优先排列，其余按|RPS五日变化|排序。观察池，不构成方向建议；基差/库存未接入，期限确认仅用期货Carry。'
-STRUCTURE_NOTE = ('商品结构雷达：用商品市场独有的资金(OI)/现货(基差)/跨期(月差)/曲线(期限结构)/库存五维度'
-    '回答"这波趋势背后有没有真实资金与真实供需支撑"，与技术面（RPS/ADX/ATR/突破/量能）互补。'
-    '"多/空头酝酿"=结构占优方向与当前价格趋势相反且结构分≥55：供需结构先变、价格尚未确认，是提前观察区而非入场信号。'
-    '缺失维度不计入可用分按可用分归一：现货/基差需导入fundamentals.csv，库存当前未接入，无真实月对品种的月差与Carry缺失。')
+STRUCTURE_NOTE = ('商品结构独立给出偏多/偏空：量价、现货基差、期限曲线、库存四组等权；月差与Carry合并为一组。'
+    '偏多分减偏空分≥10为偏多，≤-10为偏空，其余中性。缺失组不参与，同时显示覆盖率。'
+    '背离仅表示结构和价格趋势方向相反，不能证明供需先变或即将反转；总OI不识别净多空。')
 
 # 10倍期权模型：轻中度虚值(|Delta| 0.10–0.40) + 7–30天，甜区 |Delta| 0.15–0.30 / DTE 7–15。
 TB_DELTA_BAND = (0.10, 0.40)
@@ -37,7 +36,7 @@ TB_ENGINE_WEIGHTS = dict(startup=25, rps=15, adx=10, oi_volume=10, fundamentals=
 TB_CONTRACT_WEIGHTS = dict(gamma_delta=10, dte=5, liquidity=5)
 
 NOTES = [
-    '爆发指数按十项权重（RPS强度15/RPS加速度10/ADX加速度10/突破10/OI10/量能5/基本面10/期限结构10/IV10/期权流动性10）计算，缺失模块按可用权重归一。',
+    '期权综合分按十项权重（RPS强度15/RPS加速度10/ADX加速度10/突破10/OI10/量能5/基本面10/期限结构10/IV10/期权流动性10）计算，缺失模块按可用权重归一；与总览标的爆发指数独立。',
     '多空口径对称：方向RPS20=多头取原始RPS20、空头取100−原始RPS20，信号①对空头即原始RPS排全市场后10%；信号②对空头指原始RPS加速走弱；信号④对空头指跌破平台；信号⑧对空头指Contango同向。OI、量能、IV、流动性为多空共用中性条件。',
     '没有IV历史分位：用参考IV−HV20溢价替代IV Rank，溢价低或为负代表期权相对已实现波动不贵。',
     '库存/仓单未接入：仅当外部导入现货/基差且身份匹配时评估基本面方向，否则该模块缺失。',
@@ -422,15 +421,17 @@ def _structure_oi(record):
     ret5, oi5, oi20 = (record.get(k) for k in ['return5', 'oi_change5', 'oi_change20'])
     if not _finite(ret5, oi5):
         return _dim('无数据', None, 0, 0, ok=False)
+    if ret5 == 0 or oi5 == 0:
+        return _dim('价格或持仓持平', None, 0, 0, 0, '平稳')
     up, oi_up = ret5 > 0, oi5 > 0
     if up and oi_up:
-        state, direction, base = '新多进入', 'long', 8
+        state, direction, base = '增仓上涨', 'long', 8
     elif up:
-        state, direction, base = '空头平仓', 'long', 3
+        state, direction, base = '减仓上涨', 'long', 3
     elif oi_up:
-        state, direction, base = '新空进入', 'short', 8
+        state, direction, base = '增仓下跌', 'short', 8
     else:
-        state, direction, base = '多头撤退', 'short', 3
+        state, direction, base = '减仓下跌', 'short', 3
     change = None
     if _finite(oi20):
         pace5, pace20 = oi5 / 5, oi20 / 20
@@ -473,9 +474,9 @@ def _structure_spread(record):
     if not _finite(spread5):
         return _dim('无数据', None, 0, 0, ok=False)
     if spread5 > 0:
-        state, direction = '近端转紧', 'long'
+        state, direction = '近月相对走强', 'long'
     elif spread5 < 0:
-        state, direction = '近端转松', 'short'
+        state, direction = '近月相对走弱', 'short'
     else:
         state, direction = '近端平稳', None
     long_e = 8 * (spread5 > 0) + 2 * (spread5 > 0 and _finite(spread) and spread > 0)
@@ -526,9 +527,13 @@ def structure_radar(record):
     dims = dict(oi=_structure_oi(record), basis=_structure_basis(record), spread=_structure_spread(record),
         term=_structure_term(record), inventory=_structure_inventory(record))
     coverage = sum(1 for d in dims.values() if d['status'] == 'ok')
-    available = coverage * 10
-    long_score = round(sum(d['long'] for d in dims.values() if d['status'] == 'ok') / available * 100, 1) if available else None
-    short_score = round(sum(d['short'] for d in dims.values() if d['status'] == 'ok') / available * 100, 1) if available else None
+    groups = [dims[k] for k in ['oi', 'basis', 'inventory'] if dims[k]['status'] == 'ok']
+    curve = [dims[k] for k in ['spread', 'term'] if dims[k]['status'] == 'ok']
+    if curve:
+        groups.append({side: sum(d[side] for d in curve)/len(curve) for side in ['long', 'short']})
+    available = len(groups) * 10
+    long_score = round(sum(d['long'] for d in groups) / available * 100, 1) if available else None
+    short_score = round(sum(d['short'] for d in groups) / available * 100, 1) if available else None
     dominant = None
     if long_score is not None:
         if long_score - short_score >= 10:
@@ -547,7 +552,8 @@ def structure_radar(record):
         oi=dims['oi'], basis=dims['basis'], spread=dims['spread'], term=dims['term'], inventory=dims['inventory'],
         long_score=long_score, short_score=short_score, dominant=dominant,
         long_bias=dominant == 'long', short_bias=dominant == 'short',
-        divergence=divergence, quality=quality, coverage=coverage)
+        divergence=divergence, quality=quality, coverage=coverage,
+        effective_groups=len(groups), group_coverage=len(groups)/4*100)
 
 
 def annotate_options(payload, option_payload):
@@ -714,6 +720,8 @@ def build_scanner(payload, options, top=5):
         for record in payload.get('records', []):
             if record.get('direction') != direction:
                 continue
+            if 'decision_side' in record and record['decision_side'] != direction:
+                continue
             scanned = scan_one(record, direction, chains.get(record.get('ts_code'), []))
             if scanned['explosion_score'] is not None:
                 rows.append(scanned)
@@ -758,7 +766,7 @@ def build_scanner(payload, options, top=5):
         if code in seen:
             continue
         seen.add(code)
-        row = structure_radar(record)
+        row = dict(record.get('structure_evidence') or structure_radar(record))
         if row['coverage'] == 0:
             continue
         row['best_score'] = max(row['long_score'] or 0, row['short_score'] or 0)

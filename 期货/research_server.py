@@ -11,7 +11,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse,parse_qs
 from dashboard_data import build_payload, LABELS, BOOLEAN_FIELDS
-from decision_v2 import build_decisions
+from decision_v2 import build_decisions, unify_records
+from trend_model import MODEL_VERSION
 from collector import DataError, atomic_json, read_csv
 from config import DATA_DIR
 from trend_phases import PhaseSettings
@@ -87,8 +88,11 @@ def phase_settings(values):
 
 def ensure_decision_payload(payload):
     payload=dict(payload)
-    if 'decisions' not in payload or any('trend_state' not in row for row in payload.get('decisions',[])):
-        payload['decisions']=build_decisions(payload.get('records',[]))
+    if payload.get('model_version') != MODEL_VERSION or 'decisions' not in payload:
+        payload['records']=[dict(row) for row in payload.get('records',[])]
+        payload['decisions']=build_decisions(payload['records'])
+        unify_records(payload['records'], payload['decisions'])
+        payload['model_version']=MODEL_VERSION
     payload['decision_summary']={state:sum(1 for row in payload['decisions'] if row.get('state_v2')==state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
     factors=list(payload.get('factors',[]));existing={item.get('key') for item in factors}
     for key,value in LABELS.items():
@@ -102,15 +106,30 @@ class ResearchStore:
         self.root=Path(root);self.lock=threading.RLock();self.job={'status':'idle'};self.active=asof;self.option_cache={}
         phase_path=self.root/'quality/phase_settings.json'
         self.phase=phase_settings(json.loads(phase_path.read_text(encoding='utf-8'))) if phase_path.exists() else PhaseSettings()
-        cached=mysql_cache_get(asof,'api:data')
-        self.payload=ensure_decision_payload(cached) if cached is not None else empty_payload(asof)
+        self.payloads={}
+        self.payload=self._load(asof)
+        self.payloads[asof]=self.payload
         self._persist_state()
     def _persist_state(self):atomic_json(dict(active=self.active,job=self.job),self.root/'quality/dashboard_state.json')
     def get(self,asof=None):
         asof = asof or self.active
+        with self.lock:
+            if asof==self.active:return self.payload
+            if asof not in self.payloads:self.payloads[asof]=self._load(asof)
+            return self.payloads[asof]
+    def _load(self,asof):
         cached=mysql_cache_get(asof,'api:data')
-        if cached is not None:return ensure_decision_payload(cached)
-        with self.lock:return self.payload if asof==self.active else empty_payload(asof)
+        if cached is not None and cached.get('model_version')==MODEL_VERSION:
+            return ensure_decision_payload(cached)
+        sources=[self.root/'updates'/asof,self.root]
+        try:sources.append(snapshot_source(self.root,asof))
+        except DataError:pass
+        for source in sources:
+            history=source/'quality/history_run.json'
+            if history.exists() and json.loads(history.read_text()).get('asof')==asof:
+                try:return ensure_decision_payload(build_payload(source,asof,self.phase))
+                except (DataError,OSError):continue
+        return ensure_decision_payload(cached) if cached is not None else empty_payload(asof)
     def begin(self,kind,request):
         with self.lock:
             if self.job['status'] in ['queued','running']:raise ValueError('已有任务运行，请等待完成')
@@ -139,19 +158,29 @@ class ResearchStore:
                 self.progress('验证指标并写入数据库');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
                 if not payload['quality']['success']:raise DataError('有效篮子不足，保留原数据库数据')
                 if not mysql_cache_put(asof,'api:data',payload):raise DataError('写入 MySQL 失败，请检查数据库连接')
-                with self.lock:self.active,self.payload=asof,ensure_decision_payload(payload)
+                with self.lock:
+                    self.active,self.payload=asof,ensure_decision_payload(payload)
+                    self.payloads[asof]=self.payload
             elif kind=='reload':
                 source=self.root/'reloads'/uuid.uuid4().hex
                 shutil.copytree(snapshot_source(self.root,asof),source)
                 self.copy_supplements(source)
                 payload=publish_snapshot(self.root,build_payload(source,asof,self.phase),source)
-                with self.lock:self.active,self.payload=asof,ensure_decision_payload(payload)
+                with self.lock:
+                    self.active,self.payload=asof,ensure_decision_payload(payload)
+                    self.payloads[asof]=self.payload
             elif kind=='options':
                 from option_data import fetch_options
-                result=fetch_options(self.root,asof,bool(request.get('force',False)),self.progress,selected_root=snapshot_source(self.root,asof))
+                try:selected_root=snapshot_source(self.root,asof)
+                except DataError:
+                    selected_root=self.root/'updates'/asof
+                    if not (selected_root/f'raw/selected/{asof}.csv').exists():raise DataError('请先更新行情数据')
+                result=fetch_options(self.root,asof,bool(request.get('force',False)),self.progress,selected_root=selected_root)
                 if not result['records']:raise DataError('期权接口没有可用链，请查看覆盖报告')
                 if result['failures']:
-                    with self.lock:self.job.update(status='partial',message=f'期权链已保存，{len(result["failures"])}项覆盖失败')
+                    with self.lock:
+                        self.job.update(status='partial',message=f'期权链已保存，{len(result["failures"])}项覆盖失败')
+                        self.option_cache={}
                     return
             with self.lock:self.job.update(status='success',message='任务完成',finished_at=datetime.now().isoformat(timespec='seconds'));self.option_cache={}
         except Exception as exc:
@@ -166,7 +195,12 @@ class ResearchStore:
         if not 0<=rate<=.2:raise ValueError('参考无风险利率须在0—20%之间')
         if code is None and abs(rate-.02)<1e-12:
             cached=mysql_cache_get(asof,'api:options:rate:0.02')
-            if cached is not None:return cached
+            if cached is not None:
+                from copy import deepcopy
+                from option_scanner import annotate_options
+                result=deepcopy(cached)
+                annotate_options(self.get(asof),result)
+                return result
         key=(asof,round(rate,6))
         with self.lock:cached=self.option_cache.get(key)
         if cached is None:
@@ -244,8 +278,7 @@ def main():
                 elif parsed.path=='/api/scanner':
                     from option_scanner import build_scanner
                     top=min(max(int(params.get('top',['5'])[0]),1),10)
-                    cached=mysql_cache_get(asof,f'api:scanner:top:{top}')
-                    self.respond(cached if cached is not None else build_scanner(store.get(asof),store.option_payload(asof),top))
+                    self.respond(build_scanner(store.get(asof),store.option_payload(asof),top))
                 elif parsed.path=='/api/options/underlying':self.respond(store.underlying(asof,params.get('code',[''])[0]))
                 elif parsed.path=='/api/runs':self.respond([json.loads(path.read_text(encoding='utf-8')) for path in sorted((store.root/'processed/filter_runs').glob('*.json'),reverse=True)][:30])
                 elif parsed.path=='/api/template':self.respond(dict(columns=['ts_code','trade_date','available_date','underlying_code','quote_unit','source','spot_price','commodity_oi'],records=[]))

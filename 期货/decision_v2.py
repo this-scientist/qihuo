@@ -2,6 +2,7 @@
 from collections import defaultdict
 import math
 from trend_state import classify_trend_state
+from trend_model import MODEL_VERSION, price_trend, burst_index
 
 
 DIR_GATE = 25
@@ -113,23 +114,13 @@ def start_score(row):
 
 
 def structure_confirm(row, side):
-    sign = _sign(side)
-    support = 0.0
-    conflict = 0.0
-    for key, weight in [('spread_change5', 5), ('carry_change5', 4), ('basis_change5', 3), ('spot_change5', 2)]:
-        value = row.get(key)
-        if not _finite(value) or not sign:
-            continue
-        aligned = sign * float(value)
-        if aligned > 0:
-            support += weight
-        elif aligned < 0:
-            conflict += weight
-    if conflict >= 7 and conflict > support:
-        return 'CONFLICT'
-    if support >= 5 and support >= conflict:
-        return 'SUPPORT'
-    return 'NEUTRAL'
+    from option_scanner import structure_radar
+    radar = row.get('structure_evidence') or structure_radar(row)
+    if not radar['coverage']:
+        return 'UNKNOWN'
+    if side not in {'long', 'short'} or not radar['dominant']:
+        return 'NEUTRAL'
+    return 'SUPPORT' if radar['dominant'] == side else 'CONFLICT'
 
 
 def _dir_bucket(score):
@@ -236,8 +227,14 @@ def _rank_field(decisions, source, target, fallback):
                 decision[target] = None
         return
     ordered = sorted(valid, key=lambda item: float(item[1]))
-    for rank, (idx, _) in enumerate(ordered):
-        decisions[idx][target] = round(rank / (len(ordered) - 1) * 100, 2)
+    for decision in decisions:
+        decision[target] = None
+    ranks = defaultdict(list)
+    for rank, (_, value) in enumerate(ordered):
+        ranks[float(value)].append(rank)
+    for idx, value in ordered:
+        tied = ranks[float(value)]
+        decisions[idx][target] = round(sum(tied)/len(tied)/(len(ordered)-1)*100, 2)
 
 
 def build_decisions(records):
@@ -248,7 +245,33 @@ def build_decisions(records):
     decisions = []
     for code, rows in grouped.items():
         side, primary, dir_score, long_strength, short_strength = _pick_side(rows)
+        model = price_trend(rows[0])
+        if model['status'] == 'ok':
+            side, dir_score = model['side'], model['score']
+            primary = next((r for r in rows if r.get('direction') == side), primary)
+        else:
+            side, dir_score = 'neutral', 0.0
         decision = dict(primary)
+        decision['trend_model'] = MODEL_VERSION
+        decision['trend_model_status'] = model['status']
+        decision['trend_components'] = model['components']
+        decision['legacy_trend_direction'] = decision.get('trend_direction')
+        decision['trend_direction'] = side
+        decision['rps_accel'] = (float(decision['rps20'])-float(decision['rps20_prev5'])
+                                 if _finite(decision.get('rps20')) and _finite(decision.get('rps20_prev5')) else None)
+        if model['status'] == 'ok':
+            sign = _sign(side)
+            decision['extension_atr'] = sign * (decision['close']-decision['ma20'])/decision['atr14']
+            decision['overextended'] = decision['extension_atr'] > 3
+            decision['confirmed'] = abs(dir_score) >= 50 and _num(decision.get('adx')) >= 20
+            decision['phase'] = ('震荡' if not sign else '过度延伸' if decision['overextended'] else
+                                 '持续趋势' if decision['confirmed'] else '方向形成')
+        from option_scanner import structure_radar
+        decision['structure_evidence'] = structure_radar(decision)
+        decision['structure_direction'] = decision['structure_evidence']['dominant'] or ('neutral' if decision['structure_evidence']['coverage'] else 'unknown')
+        decision['structure_score'] = (round(decision['structure_evidence']['long_score']-decision['structure_evidence']['short_score'], 2)
+                                       if decision['structure_evidence']['coverage'] else None)
+        decision.update(burst_index(decision, side))
         decision['ts_code'] = code
         decision['decision_side'] = side
         decision['decision_direction'] = _direction_label(side)
@@ -261,6 +284,8 @@ def build_decisions(records):
         decision['structure_confirm'] = structure_confirm(decision, side)
         decision['state_v2'] = _state(decision, dir_score, decision['start_score'], decision['structure_confirm'])
         decision.update(classify_trend_state(decision, side, decision['state_v2'], decision['start_score']))
+        decision['phase_reason'] = decision['trend_state_reason']
+        decision['phase_age'] = None
         decision['candidate_tier'] = _candidate_tier(decision['state_v2'], decision['start_score'])
         decision['option_action'] = _option_action(side, decision['state_v2'], decision['structure_confirm'], decision.get('trend_option_gate'))
         decision['v2_active'] = decision['state_v2'] in {'START', 'TREND'}
@@ -278,3 +303,18 @@ def build_decisions(records):
     _rank_field(decisions, 'volume_ratio', 'vol_rps', lambda row: _volume_attention(row))
     _rank_field(decisions, 'oi_change5', 'oi_change_rps', lambda row: min(100.0, max(0.0, _num(row.get('oi_change5')) * 10)))
     return decisions
+
+
+def unify_records(records, decisions):
+    """Directional input rows remain two-sided; commodity conclusions are shared."""
+    by_code = {row['ts_code']: row for row in decisions}
+    fields = ['decision_side', 'decision_direction', 'trend_direction', 'trend_model',
+              'dir_score', 'trend_state', 'trend_state_label', 'trend_state_reason',
+              'structure_direction', 'structure_score', 'structure_confirm', 'structure_evidence',
+              'rps_accel', 'burst_score', 'burst_coverage', 'phase', 'phase_reason', 'phase_age', 'state_v2']
+    for row in records:
+        decision = by_code.get(row['ts_code'])
+        if decision:
+            row.update({key: decision.get(key) for key in fields})
+            row['phase_match'] = row.get('direction') == decision['decision_side']
+    return records

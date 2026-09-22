@@ -428,9 +428,9 @@ class StructureRadarTests(unittest.TestCase):
         return base
 
     def test_oi_four_states(self):
-        # 价涨仓增=新多进入（多头高分）；价涨仓减=空头平仓（低质量多头）；价跌仓增=新空进入；价跌仓减=多头撤退。
-        cases = [(3.0, 6.0, '新多进入', 'long'), (3.0, -6.0, '空头平仓', 'long'),
-                 (-3.0, 6.0, '新空进入', 'short'), (-3.0, -6.0, '多头撤退', 'short')]
+        # Aggregate OI describes participation, not the identity of opening traders.
+        cases = [(3.0, 6.0, '增仓上涨', 'long'), (3.0, -6.0, '减仓上涨', 'long'),
+                 (-3.0, 6.0, '增仓下跌', 'short'), (-3.0, -6.0, '减仓下跌', 'short')]
         for ret5, oi5, state, direction in cases:
             row = structure_radar(self._record(return5=ret5, oi_change5=oi5))['oi']
             self.assertEqual(row['state'], state)
@@ -486,7 +486,7 @@ class StructureRadarTests(unittest.TestCase):
     def test_basis_and_spread_directions(self):
         contango_loosening = structure_radar(self._record(trend_direction='short', spread_change5=-4.0,
             spread=-10.0, carry_annualized=-6.0, structure='Contango', return5=-2.0, oi_change5=5.0))
-        self.assertEqual(contango_loosening['spread']['state'], '近端转松')
+        self.assertEqual(contango_loosening['spread']['state'], '近月相对走弱')
         self.assertEqual(contango_loosening['term']['direction'], 'short')
         basis_weak = structure_radar(self._record(trend_direction='short',
             spot_change5=-1.0, basis_change5=-20.0))['basis']
