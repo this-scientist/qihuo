@@ -16,6 +16,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
+def _timeout(name: str, default: int) -> int:
+    try:
+        return max(1, int(float(os.getenv(name, str(default)))))
+    except ValueError:
+        return default
+
+
 def mysql_config() -> dict[str, Any]:
     return dict(
         host=os.getenv("MYSQL_HOST", "127.0.0.1"),
@@ -26,6 +33,9 @@ def mysql_config() -> dict[str, Any]:
         charset="utf8mb4",
         autocommit=False,
         cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=_timeout("MYSQL_CONNECT_TIMEOUT", 2),
+        read_timeout=_timeout("MYSQL_READ_TIMEOUT", 5),
+        write_timeout=_timeout("MYSQL_WRITE_TIMEOUT", 5),
     )
 
 

@@ -55,6 +55,23 @@ def mysql_latest_asof():
     dates=mysql_cached_dates()
     return dates[0]['asof'] if dates else None
 
+def file_snapshot_get(root,asof):
+    try:
+        return ensure_decision_payload(read_snapshot(root,asof))
+    except DataError as exc:
+        if str(exc)=='Requested dashboard snapshot unavailable':return None
+        raise
+
+def available_snapshots(root):
+    values={entry['asof']:dict(entry) for entry in list_snapshots(root)}
+    for entry in mysql_cached_dates():
+        merged=dict(values.get(entry['asof'],{}));merged.update(entry);values[entry['asof']]=merged
+    return sorted(values.values(),key=lambda entry:entry['asof'],reverse=True)
+
+def latest_available_asof(root):
+    dates=available_snapshots(root)
+    return dates[0]['asof'] if dates else None
+
 def valid_date(value):
     if not isinstance(value,str) or len(value)!=8 or not value.isdigit():raise ValueError('日期必须为YYYYMMDD')
     datetime.strptime(value,'%Y%m%d');return value
@@ -103,14 +120,16 @@ class ResearchStore:
         phase_path=self.root/'quality/phase_settings.json'
         self.phase=phase_settings(json.loads(phase_path.read_text(encoding='utf-8'))) if phase_path.exists() else PhaseSettings()
         cached=mysql_cache_get(asof,'api:data')
-        self.payload=ensure_decision_payload(cached) if cached is not None else empty_payload(asof)
+        self.payload=ensure_decision_payload(cached) if cached is not None else file_snapshot_get(self.root,asof) or empty_payload(asof)
         self._persist_state()
     def _persist_state(self):atomic_json(dict(active=self.active,job=self.job),self.root/'quality/dashboard_state.json')
     def get(self,asof=None):
         asof = asof or self.active
         cached=mysql_cache_get(asof,'api:data')
         if cached is not None:return ensure_decision_payload(cached)
-        with self.lock:return self.payload if asof==self.active else empty_payload(asof)
+        with self.lock:
+            if asof==self.active:return self.payload
+        return file_snapshot_get(self.root,asof) or empty_payload(asof)
     def begin(self,kind,request):
         with self.lock:
             if self.job['status'] in ['queued','running']:raise ValueError('已有任务运行，请等待完成')
@@ -118,7 +137,7 @@ class ResearchStore:
             if kind=='update':
                 now=datetime.now()
                 if asof>now.strftime('%Y%m%d') or asof==now.strftime('%Y%m%d') and now.hour<17:raise ValueError('只能更新已收盘日期；当日17点后开放')
-            elif asof!=self.active and mysql_cache_get(asof,'api:data') is None:raise DataError('数据库暂无该日期数据，请先更新行情')
+            elif asof!=self.active and mysql_cache_get(asof,'api:data') is None and file_snapshot_get(self.root,asof) is None:raise DataError('数据库暂无该日期数据，请先更新行情')
             self.job=dict(id=uuid.uuid4().hex,kind=kind,asof=asof,status='queued',message='等待执行',started_at=datetime.now().isoformat(timespec='seconds'))
             self._persist_state();threading.Thread(target=self._worker,args=(kind,asof,request),daemon=True).start();return dict(self.job)
     def progress(self,message):
@@ -227,7 +246,7 @@ class ResearchStore:
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--asof');parser.add_argument('--data-dir',type=Path,default=DATA_DIR);parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
     state=args.data_dir/'quality/dashboard_state.json'
-    asof=args.asof or (json.loads(state.read_text(encoding='utf-8'))['active'] if state.exists() else mysql_latest_asof() or default_asof())
+    asof=args.asof or (json.loads(state.read_text(encoding='utf-8'))['active'] if state.exists() else latest_available_asof(args.data_dir) or default_asof())
     store=ResearchStore(args.data_dir,valid_date(asof));frontend=Path(__file__).with_name('frontend')
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*params,**kwargs):super().__init__(*params,directory=str(frontend),**kwargs)
@@ -238,7 +257,7 @@ def main():
             try:
                 asof=valid_date(params['asof'][0]) if 'asof' in params else store.active
                 if parsed.path=='/api/data':self.respond(store.get(asof))
-                elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=mysql_cached_dates()))
+                elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=available_snapshots(store.root)))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))
                 elif parsed.path=='/api/scanner':
