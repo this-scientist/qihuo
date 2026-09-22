@@ -80,7 +80,9 @@ function setView(view){
 }
 function header(){
  const [eyebrow,title,question]=VIEW_TITLES[state.view];
- return `<div class="page-hero"><div><h1>${title}</h1></div><div class="hero-actions"><label class="inline-label">观察窗口<select id="window"><option value="20">20交易日</option><option value="60" selected>60交易日</option><option value="120">120交易日</option><option value="250">250交易日</option></select></label><button id="export-csv">导出数据</button></div></div>`;
+ const coverage=data?.quality?.coverage_warning;
+ const banner=coverage?`<div class="notice coverage-warning" role="alert">⚠ 数据不完整：${coverage.trade_date} 未采集 ${coverage.missing_exchanges.join('、')}。${coverage.note}</div>`:'';
+ return `${banner}<div class="page-hero"><div><h1>${title}</h1></div><div class="hero-actions"><label class="inline-label">观察窗口<select id="window"><option value="20">20交易日</option><option value="60" selected>60交易日</option><option value="120">120交易日</option><option value="250">250交易日</option></select></label><button id="export-csv">导出数据</button></div></div>`;
 }
 function statCards(){
  const all=rows();

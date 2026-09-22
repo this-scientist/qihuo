@@ -145,21 +145,24 @@ def run_focused(collector, start, end, force=False):
                 outputs.setdefault(date, {})[exchange] = (selected, main, curve)
             except DataError as exc:
                 collector.record_failure('focused', exchange, date, exc)
-    published = []
-    if len(calendars) == len(collector.exchanges):
-        for date, parts in sorted(outputs.items()):
-            expected = {ex for ex, dates in calendars.items() if date in dates}
-            if set(parts) != expected:
-                continue
-            for index, folder in [(0,'selected'), (1,'main_continuous'), (2,'curve')]:
-                frames = [pair[index] for pair in parts.values() if pair[index] is not None]
-                if len(frames) != len(parts):
-                    continue  # 旧缓存日期没有曲线文件：该日不发布curve，避免部分合并
-                atomic_csv(pd.concat(frames, ignore_index=True), collector.root / f'raw/{folder}/{date}.csv')
-            published.append(date)
+    # 单一交易所延迟不再阻断整日发布；缺失交易所记入 partial_days，由下游标注口径变化。
+    published, partial = [], []
+    for date, parts in sorted(outputs.items()):
+        if not parts:
+            continue
+        missing = sorted(set(collector.exchanges) - set(parts))
+        for index, folder in [(0,'selected'), (1,'main_continuous'), (2,'curve')]:
+            frames = [pair[index] for pair in parts.values() if pair[index] is not None]
+            if len(frames) != len(parts):
+                continue  # 旧缓存日期没有曲线文件：该日不发布curve，避免部分合并
+            atomic_csv(pd.concat(frames, ignore_index=True), collector.root / f'raw/{folder}/{date}.csv')
+        published.append(date)
+        if missing:
+            partial.append(dict(trade_date=date, missing_exchanges=missing))
     report = dict(mode='focused', start_date=start, end_date=end, exchanges=collector.exchanges,
         success=not collector.failures, failures=collector.failures, skipped=skipped,
-        published_days=published, secondary_rule='largest OI among liquid non-main month contracts; ties volume then code',
+        published_days=published, partial_days=partial,
+        secondary_rule='largest OI among liquid non-main month contracts; ties volume then code',
         adjustment='none: main switch may cause price gap',
         oi_scope='individual main and secondary; not commodity total OI', finished_at=datetime.now().isoformat())
     atomic_json(report, collector.root / 'quality/latest_run.json')

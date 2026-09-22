@@ -145,6 +145,7 @@ class ResearchStore:
     def _worker(self,kind,asof,request):
         try:
             self.progress('任务开始')
+            partial_note=None
             if kind=='update':
                 from fetch_futures_data import make_collector
                 from focused import run_focused
@@ -152,7 +153,8 @@ class ResearchStore:
                 source=self.root/'updates'/asof;collector=make_collector(root=source)
                 self.progress('采集五交易所主力与次主力；旧数据库数据继续可用')
                 result=run_focused(collector,asof,asof,bool(request.get('force',False)))
-                if not result['success'] or asof not in result['published_days']:raise DataError('日期休市或采集不完整，保留原快照')
+                if asof not in result['published_days']:raise DataError('日期休市或采集不完整，保留原快照')
+                missing=next((item['missing_exchanges'] for item in result.get('partial_days',[]) if item['trade_date']==asof),[])
                 self.progress('补齐历史与换月校正')
                 prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
                 self.progress('验证指标并写入数据库');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
@@ -161,6 +163,7 @@ class ResearchStore:
                 with self.lock:
                     self.active,self.payload=asof,ensure_decision_payload(payload)
                     self.payloads[asof]=self.payload
+                if missing:partial_note=f'已发布，但缺{"、".join(missing)}；RPS等跨品种分位与历史不可比'
             elif kind=='reload':
                 source=self.root/'reloads'/uuid.uuid4().hex
                 shutil.copytree(snapshot_source(self.root,asof),source)
@@ -182,7 +185,9 @@ class ResearchStore:
                         self.job.update(status='partial',message=f'期权链已保存，{len(result["failures"])}项覆盖失败')
                         self.option_cache={}
                     return
-            with self.lock:self.job.update(status='success',message='任务完成',finished_at=datetime.now().isoformat(timespec='seconds'));self.option_cache={}
+            with self.lock:
+                self.job.update(status='partial' if partial_note else 'success',message=partial_note or '任务完成',finished_at=datetime.now().isoformat(timespec='seconds'))
+                self.option_cache={}
         except Exception as exc:
             with self.lock:self.job.update(status='failed',message=str(exc) if isinstance(exc,(DataError,ValueError)) else type(exc).__name__,finished_at=datetime.now().isoformat(timespec='seconds'))
         finally:
