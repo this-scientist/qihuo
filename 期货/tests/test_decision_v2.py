@@ -38,6 +38,13 @@ def side_row(direction, **overrides):
         signal_atr_expansion=False,
     )
     base.update(overrides)
+    # The canonical model needs actual price inputs, not legacy module scores.
+    sign = 1 if base['return5'] > 1 else -1 if base['return5'] < -1 else 0
+    base.update(close=100+sign*10, ma20=100+sign*5, ma60=100, atr14=2,
+                slope20=sign, return20=sign*8, adx=22 if base['phase']=='趋势启动' else 25,
+                plus_di=20+sign*10, minus_di=20-sign*10)
+    if base['overextended']:
+        base['close'] = base['ma20']+sign*8
     return base
 
 

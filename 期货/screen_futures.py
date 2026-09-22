@@ -24,7 +24,7 @@ def load_inputs(root, asof, settings):
         raise DataError('Missing prepared data; run with --refresh-history first')
     snapshot_report=json.loads(report_path.read_text(encoding='utf-8'))
     history_report=json.loads(history_path.read_text(encoding='utf-8'))
-    if snapshot_report.get('mode')!='focused' or not snapshot_report.get('success') or asof not in snapshot_report.get('published_days',[]):
+    if snapshot_report.get('mode')!='focused' or asof not in snapshot_report.get('published_days',[]):
         raise DataError('Snapshot incomplete or requested date not published')
     if set(snapshot_report['exchanges'])!=set(COMMODITY_EXCHANGES):
         raise DataError('Official market-wide radar requires all five commodity exchanges')
@@ -56,6 +56,19 @@ def load_inputs(root, asof, settings):
         except (DataError,OSError) as exc:
             exclusions.append(dict(ts_code=code,exchange=entry['exchange'],reason=str(exc)))
     return selected,series,exclusions,prepared
+
+
+def partial_coverage(root, asof):
+    """部分交易所当日未采集时，跨品种分位按缩减篮子计算，必须显式标注。"""
+    path=Path(root)/'quality/latest_run.json'
+    if not path.exists():
+        return None
+    entry=next((item for item in json.loads(path.read_text(encoding='utf-8')).get('partial_days',[])
+        if item.get('trade_date')==asof),None)
+    if not entry:
+        return None
+    return dict(trade_date=asof,missing_exchanges=entry['missing_exchanges'],
+        note='部分交易所当日未采集；RPS等跨品种分位按缩减篮子计算，与全篮子历史日期不可比')
 
 
 def screen(root, asof, settings=None):
@@ -107,6 +120,7 @@ def screen(root, asof, settings=None):
     report=dict(asof=asof,success=valid,eligible_universe=universe,current_liquid_commodities=int(selected.role.eq('main').sum()),
         excluded_histories=len(selected[selected.role.eq('main')])-universe,settings=asdict(settings),
         counts={key:len(value) for key,value in lists.items()},
+        coverage_warning=partial_coverage(root,asof),
         reason=None if valid else f'Universe below {settings.min_universe}; official lists withheld',
         basis='not available; explicitly excluded from available weight',
         oi_scope='current fixed main/secondary pair, not whole commodity OI',

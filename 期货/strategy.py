@@ -66,6 +66,7 @@ def indicators(data):
         df[f'ma{n}']=c.rolling(n).mean()
         df[f'return{n}']=c/c.shift(n)-1
         df[f'slope{n}']=df[f'ma{n}']/df[f'ma{n}'].shift(5)-1
+    df['return1']=c/c.shift(1)-1
     df['return5']=c/c.shift(5)-1
     df['trend_spread']=(df.ma20-df.ma120)/df.ma120
     df['trend_spread_change5']=df.trend_spread-df.trend_spread.shift(5)
@@ -99,7 +100,7 @@ def indicators(data):
 def rps_panel(data):
     required(data,['ts_code','trade_date','close'])
     df=unique(data,['ts_code','trade_date']).sort_values(['ts_code','trade_date']).copy()
-    for n in [20,60,120]:
+    for n in [5,20,60,120]:
         returns=df.groupby('ts_code').close.transform(lambda c: c/c.shift(n)-1)
         group=returns.groupby(df.trade_date)
         rank=group.rank(method='average')
@@ -140,6 +141,11 @@ def pair_context(data, asof, trading_dates=None):
     matched=df[df.trade_date.isin(valid_dates)]
     summed=matched.groupby('trade_date')[['oi','vol']].agg(lambda x: x.sum(min_count=len(codes))).sort_index()
     result={'oi_scope':scope,'main_code':codes['main'],'secondary_code':codes.get('secondary')}
+    if not summed.empty and summed.index[-1] == asof:
+        result['pair_oi'] = number(summed.oi.iloc[-1])
+        today = matched[matched.trade_date.eq(asof)].set_index('role')
+        result['main_oi'] = number(today.loc['main', 'oi'])
+        result['secondary_oi'] = number(today.loc['secondary', 'oi']) if 'secondary' in today.index else None
     required21=list(trading_dates)[-21:] if trading_dates is not None else None
     complete21=required21 is None or (len(required21)==21 and summed.index[-21:].tolist()==required21)
     if len(summed)>=21 and summed.index[-1]==asof and complete21:

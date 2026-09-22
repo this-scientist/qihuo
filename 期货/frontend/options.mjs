@@ -48,7 +48,7 @@ function renderTradability(option){
  }
  const b=tb.breakdown||{};
  const rows=[['可做性',tb.score==null?'—':`${tb.score}（${tb.grade}）`],
-  ['标的',tb.underlying_name?`${tb.underlying_name} · ${DIR_TEXT[tb.trend_direction]??'—'} · ${tb.phase??'—'}（爆发指数${fmt(tb.explosion)}）`:'—'],
+  ['标的',tb.underlying_name?`${tb.underlying_name} · ${DIR_TEXT[tb.trend_direction]??'—'} · ${tb.phase??'—'}（期权综合分${fmt(tb.explosion)}）`:'—'],
   ['标的发动机',`${b.underlying??'—'}/${b.underlying_max??55}`],
   ['Gamma/Delta',`${b.gamma??'—'}/10 + ${b.delta??'—'}/5`],
   ['IV贵贱',b.iv==null?`缺失（0/${b.iv_max??10}）`:`${b.iv}/${b.iv_max??10}${tb.iv_premium_pct==null?'':`（较HV20 ${tb.iv_premium_pct>0?'+':''}${tb.iv_premium_pct}%）`}`],
