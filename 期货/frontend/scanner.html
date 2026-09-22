@@ -26,9 +26,11 @@
   <div class="scan-controls compact-controls" role="tablist" aria-label="扫描方向">
     <button id="dir-long" class="active" role="tab" aria-selected="true">做多候选</button>
     <button id="dir-short" role="tab" aria-selected="false">做空候选</button>
-    <button id="dir-structure" role="tab" aria-selected="false">结构复核</button>
-    <span id="scan-summary" class="muted small"></span>
-  </div>
+    <button id="dir-structure" role="tab" aria-selected="false">结构雷达</button>
+ <button id="dir-custom" role="tab" aria-selected="false">自定义品种</button>
+ <span id="scan-summary" class="muted small"></span>
+</div>
+<div class="research-controls" id="custom-controls" hidden><label>品种<select id="custom-code"><option value="">请选择品种</option></select></label><label>方向<select id="custom-side"><option value="long">多头</option><option value="short">空头</option></select></label><button id="load-custom" class="primary">查看该品种</button><span class="muted small">展示的列与详情与"做多/做空候选"完全一致</span></div>
 
   <details class="quality compact-details">
     <summary>高级雷达</summary>
@@ -61,8 +63,13 @@
     <h3>候选合约</h3><div id="contract-note" class="notice"></div>
     <div class="table-wrap"><table><thead><tr><th>期权合约</th><th>档位</th><th>方向</th><th>行权价</th><th>剩余天</th><th>Delta</th><th>Gamma</th><th>Theta/日</th><th>Vega/1%</th><th>参考IV</th><th>成交量</th><th>持仓量</th></tr></thead><tbody id="contract-rows"></tbody></table></div>
     <details class="quality compact-details"><summary>期限结构明细</summary><div id="term-note" class="notice"></div><div class="table-wrap"><table><thead><tr><th>合约</th><th>角色</th><th>交割月</th><th>距交割天数</th><th>结算价</th><th>成交量</th><th>持仓量</th></tr></thead><tbody id="term-rows"></tbody></table></div></details>
-    <div class="notice">到期损益与真实标的走势可在<a id="detail-option-link" href="#">期权明细</a>页按品种查看。</div>
-  </section>
+    <div class="notice">到期损益与真实标的走势可在<a id="detail-option-link" href="#">期权观察</a>页按品种查看。</div>
+ <h3>AI 综合研判（DeepSeek）</h3>
+ <div class="notice">大模型只依据本页数据作答；<strong>产业逻辑来自模型固有知识，官方 API 无联网检索，可能过时或错误</strong>。本地支撑/压力位由真实月合约历史计算（事实基准），与模型给出的价位并列对照，不做"谁对"的结论。本分析是研究参考，不是交易指令。</div>
+ <div class="research-controls"><button id="run-ai" class="primary">AI 一键分析</button><span id="ai-status" class="muted small"></span></div>
+ <div id="ai-error" class="page-error" role="alert"></div>
+ <div id="ai-result"></div>
+</section>
 
   <details class="quality"><summary>口径与限制</summary><div id="scan-notes" class="notice"></div></details>
 </main>

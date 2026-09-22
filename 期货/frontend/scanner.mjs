@@ -1,7 +1,7 @@
 import {api,asofQuery,mountToolbar} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
 const $=id=>document.getElementById(id);
-let data,scanner,direction='long',detailCode=null;
+let data,scanner,direction='long',detailCode=null,customView=null;
 const fmt=value=>value==null?'—':Number(value).toFixed(2);
 const signed=value=>value==null?'—':`${value>=0?'+':''}${Number(value).toFixed(2)}`;
 const signedClass=(value,invert=false)=>value==null?'':Number(value)>0?(!invert?'up':'down'):(Number(value)<0?(!invert?'down':'up'):'');
@@ -114,6 +114,14 @@ const GLOSSARY={
  '背离':'结构占优方向与价格趋势相反且结构分≥55：库存/基差/月差/期限结构已先变而价格尚未反映，是提前观察区（非入场信号）。',
  '覆盖':'五维度中实际有数据的维度数；缺失维度不计入可用分，按可用分归一，不虚构数值。',
  '价格趋势':'价格趋势雷达（RPS/ADX/突破/均线）判定的方向与生命周期阶段。',
+ '自定义品种':'任选一个品种，用与"做多/做空候选"完全相同的列与详情面板复核它的评分、结构、组合信号与候选合约。',
+ 'AI 一键分析':'把本页的技术面、商品结构、期权与本地支撑压力位一起发给 DeepSeek，让它给出头寸意见、依据、失效条件与产业逻辑。仅在点击时调用，会产生 API 费用。',
+ '头寸意见':'模型给出的方向（偏多/偏空/观望）、工具（Call/Put）、|Delta| 与 DTE 区间、止损参考。是研究参考，不是交易指令。',
+ '大模型判断':'模型自己给出的支撑/压力位。不可复现（同输入两次结果可能不同），只与"本地计算"并列对照，不判定谁对。',
+ '本地（真实月合约历史计算）':'用当前真实主力合约的未复权历史算出的前高前低、整数关口、ATR通道与成交密集区；可复现，作为事实基准。',
+ '差异':'大模型价位相对本地价位的偏离百分比；超过 1% 高亮，仅提示两者不一致，不代表哪一边正确。',
+ '产业逻辑与当前状况':'模型固有知识（官方 API 无联网检索），非实时、可能过时或错误，且不参与任何评分。',
+ '数据缺口':'本次分析缺少的数据（如现货/基差、库存、盘口、IV 历史分位），用于判断结论的可信边界。',
 };
 const tip=key=>{const text=GLOSSARY[key];if(!text)return null;const s=document.createElement('span');s.className='tip';s.textContent='?';s.setAttribute('data-tip',text);return s};
 let tipActive=null,tipPinned=false;
@@ -145,36 +153,59 @@ const DIM_LABELS=[['oi','资金 · OI'],['basis','现货 · 基差'],['spread','
 const phaseText=r=>`${DIR_TEXT[r.trend_direction]??'—'}·${r.phase??'—'}${r.phase_age==null?'':`（${r.phase_age}日）`}`;
 const TAB_TITLES={long:'多头候选',short:'空头候选',extended:'过度延伸观察'};
 const rows=()=>scanner[direction];
-function renderList(){
- const list=rows();
- $('list-title').textContent=TAB_TITLES[direction]??'候选';
- $('list-count').textContent=`${list.length}个`;
- $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'期权综合分 · 标的证据、IV与合约流动性';
+function listColumns(record){
+ const m=record.metrics;
+ return [
+  {text:record.sector},
+  {text:fmt(record.explosion_score)+(record.tenbagger?.label==='高'?' · 10倍高':''),cls:'score-cell'},
+  {text:`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`},
+  {text:fmt(m.rps20)},
+  {text:signed(m.rps_accel)},
+  {text:`${fmt(m.adx)}(${signed(m.adx_slope)})`},
+  {text:signed(m.return5),cls:signedClass(m.return5)},
+  {text:signed(m.oi_change5),cls:signedClass(m.oi_change5)},
+  {text:fmt(m.volume_ratio)},
+  {text:signed(m.iv_premium),cls:signedClass(m.iv_premium,true)},
+  {text:phaseText(record),title:record.phase_reason||''},
+  {text:structCell(record),cls:structClass(record)}];
+}
+function renderRows(list,emptyText){
  const body=$('scan-rows');body.replaceChildren();
  list.forEach(record=>{
   const tr=document.createElement('tr');tr.dataset.code=record.ts_code;tr.tabIndex=0;
   const first=document.createElement('td'),name=document.createElement('strong'),contract=document.createElement('span');
   name.textContent=record.name;contract.className='contract';contract.textContent=record.main_code;first.append(name,contract);tr.appendChild(first);
-  const m=record.metrics;
-  const columns=[
-   {text:record.sector},
-   {text:fmt(record.explosion_score)+(record.tenbagger?.label==='高'?' · 10倍高':''),cls:'score-cell'},
-   {text:`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`},
-   {text:fmt(m.rps20)},
-   {text:signed(m.rps_accel)},
-   {text:`${fmt(m.adx)}(${signed(m.adx_slope)})`},
-   {text:signed(m.return5),cls:signedClass(m.return5)},
-   {text:signed(m.oi_change5),cls:signedClass(m.oi_change5)},
-   {text:fmt(m.volume_ratio)},
-   {text:signed(m.iv_premium),cls:signedClass(m.iv_premium,true)},
-   {text:phaseText(record),title:record.phase_reason||''},
-   {text:structCell(record),cls:structClass(record)}];
-  columns.forEach(({text,cls,title})=>{const td=document.createElement('td');td.textContent=text;if(cls)td.className=cls;if(title)td.title=title;tr.appendChild(td)});
+  listColumns(record).forEach(({text,cls,title})=>{const td=document.createElement('td');td.textContent=text;if(cls)td.className=cls;if(title)td.title=title;tr.appendChild(td)});
   const open=()=>{detailCode=record.ts_code;renderDetail();$('scan-detail').hidden=false;$('scan-detail').scrollIntoView({behavior:'smooth',block:'start'})};
   tr.onclick=open;tr.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open()}};
   body.appendChild(tr);
  });
- if(!list.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=13;td.className='empty';td.textContent=direction==='extended'?'当前没有处于过度延伸阶段的品种。':'当前方向没有可排名的品种。';tr.appendChild(td);body.appendChild(tr)}
+ if(!list.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=13;td.className='empty';td.textContent=emptyText;tr.appendChild(td);body.appendChild(tr)}
+}
+function renderList(){
+ const list=rows();
+ $('list-title').textContent=TAB_TITLES[direction]??'候选';
+ $('list-count').textContent=`${list.length}个`;
+ $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'期权综合分 · 标的证据、IV与合约流动性';
+ renderRows(list,direction==='extended'?'当前没有处于过度延伸阶段的品种。':'当前方向没有可排名的品种。');
+}
+async function loadCustom(){
+ const code=$('custom-code').value,side=$('custom-side').value;
+ $('scan-error').textContent='';$('list-title').textContent='自定义品种';
+ if(!code){customView=null;$('list-count').textContent='';$('scan-summary').textContent='选择一个品种，展示内容与做多/做空候选完全一致。';renderRows([],'请先选择品种，再点击"查看该品种"。');return}
+ $('load-custom').disabled=true;$('list-count').textContent='读取中…';
+ try{
+  const view=await api(`/api/candidate?asof=${scanner.asof}&code=${encodeURIComponent(code)}&direction=${side}`);
+  if($('custom-code').value!==code||$('custom-side').value!==side)return;
+  customView=view;detailCode=code;
+  $('list-count').textContent='1个';
+  $('scan-summary').textContent=`${view.name??code} · ${side==='long'?'做多':'做空'}视角 · 与候选行同一套字段`;
+  renderRows([view.candidate],'该品种没有可展示的候选行。');
+  renderDetail();$('scan-detail').hidden=false;
+ }catch(error){
+  customView=null;$('list-count').textContent='';$('scan-error').textContent=error.message;
+  renderRows([],`读取失败：${error.message}`);
+ }finally{$('load-custom').disabled=false}
 }
 const TB_ENGINE_LABELS={startup:'趋势启动（25）',rps:'RPS动量（15）',adx:'ADX/DI（10）',oi_volume:'OI+成交（10）',fundamentals:'基差/月差/库存（10）',iv_state:'IV状态（10）'};
 function renderTenbagger(record,dir){
@@ -206,9 +237,11 @@ function renderTenbagger(record,dir){
  if(!tb.contracts.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=13;td.className='empty';td.textContent='无轻中度虚值（|Delta|0.10–0.40、DTE7–30）合约；可在下方常规候选表查看主仓/彩票仓。';tr.appendChild(td);body.appendChild(tr)}
 }
 function renderDetail(){
- const record=rows().find(r=>r.ts_code===detailCode);
+ const record=direction==='custom'
+  ?(customView&&customView.candidate&&customView.candidate.ts_code===detailCode?customView.candidate:null)
+  :rows().find(r=>r.ts_code===detailCode);
  if(!record){$('scan-detail').hidden=true;return}
- const dir=direction==='extended'?record.direction:direction;
+ const dir=direction==='extended'?record.direction:(direction==='custom'?(customView?.direction||record.direction||'long'):direction);
  $('detail-title').textContent=`${record.name} · ${record.ts_code} · ${dir==='long'?'做多':'做空'}`;
  const m=record.metrics;
  $('detail-summary').replaceChildren();
@@ -267,14 +300,118 @@ function renderDetail(){
  });
  if(!record.contracts.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=12;td.className='empty';td.textContent='无可挑选合约';tr.appendChild(td);body.appendChild(tr)}
  $('detail-option-link').href=`/options.html?asof=${scanner.asof}&code=${record.ts_code}`;
+ renderAiCard(record,dir);
+}
+const AI_STANCE={long:'偏多',short:'偏空',wait:'观望'};
+function aiSection(title,rows,tag){
+ const wrap=document.createElement('div');
+ const h=document.createElement('h4');h.textContent=title;
+ if(tag){const t=document.createElement('span');t.className='contract-tier';t.textContent=tag;h.appendChild(t)}
+ wrap.appendChild(h);
+ const list=document.createElement('div');list.className='options-summary';
+ rows.forEach(([label,value])=>{
+  const div=document.createElement('div'),span=document.createElement('span');span.textContent=label;
+  div.append(span,document.createTextNode(value==null||value===''?'—':String(value)));list.appendChild(div)});
+ wrap.appendChild(list);return wrap;
+}
+function aiBullets(title,items,tag){
+ const wrap=document.createElement('div');
+ const h=document.createElement('h4');h.textContent=title;
+ if(tag){const t=document.createElement('span');t.className='contract-tier';t.textContent=tag;h.appendChild(t)}
+ wrap.appendChild(h);
+ const list=document.createElement('div');list.className='signal-list';
+ const values=(items||[]).filter(v=>v!=null&&v!=='');
+ values.forEach(text=>{const div=document.createElement('div');div.className='rule-check';const span=document.createElement('span');span.textContent=String(text);div.appendChild(span);list.appendChild(div)});
+ if(!values.length){const div=document.createElement('div');div.className='muted';div.textContent='—';list.appendChild(div)}
+ wrap.appendChild(list);return wrap;
+}
+function aiLevelsTable(result){
+ const local=result.local_levels||{},ai=result.ai_levels||{};
+ const table=document.createElement('table'),head=document.createElement('thead'),hr=document.createElement('tr');
+ ['方向','本地（真实月合约历史计算）','大模型判断','差异'].forEach(label=>{const th=document.createElement('th');th.textContent=label;hr.appendChild(th)});
+ head.appendChild(hr);table.appendChild(head);
+ const body=document.createElement('tbody');
+ [['支撑','support'],['压力','resistance']].forEach(([label,key])=>{
+  const localItems=local[key]||[],aiItems=ai[key]||[];
+  for(let i=0;i<Math.max(localItems.length,aiItems.length,1);i++){
+   const l=localItems[i],a=aiItems[i],tr=document.createElement('tr');
+   const first=document.createElement('td');first.textContent=i?label+' '+(i+1):label;tr.appendChild(first);
+   const second=document.createElement('td');
+   second.textContent=l?`${fmt(l.price)}（${(l.sources||[]).join(' / ')} · ${l.strength}）`:'—';tr.appendChild(second);
+   const third=document.createElement('td');third.textContent=a?`${fmt(a.price)}${a.why?'（'+a.why+'）':''}`:'—';tr.appendChild(third);
+   const fourth=document.createElement('td');
+   if(l&&a&&l.price){const diff=(a.price/l.price-1)*100;fourth.textContent=signed(diff)+'%';if(Math.abs(diff)>1)fourth.className='fail'}
+   else fourth.textContent='—';
+   tr.appendChild(fourth);body.appendChild(tr);
+  }
+ });
+ table.appendChild(body);return table;
+}
+function renderAiCard(record,dir){
+ $('ai-result').replaceChildren();$('ai-error').textContent='';
+ $('ai-status').textContent='尚未分析';
+ const button=$('run-ai');button.disabled=false;
+ button.onclick=()=>runAi(record,dir);
+}
+async function runAi(record,dir){
+ const button=$('run-ai');if(button.disabled)return;
+ button.disabled=true;$('ai-error').textContent='';$('ai-result').replaceChildren();
+ $('ai-status').textContent=`正在请求 DeepSeek 分析 ${record.name??record.ts_code}…（通常十几秒）`;
+ try{
+  const result=await api('/api/ai/analyze',{asof:scanner.asof,code:record.ts_code,direction:dir});
+  $('ai-status').textContent=`完成 · 模型 ${result.model??'—'} · 用时 ${result.elapsed_ms==null?'—':result.elapsed_ms+'ms'}`;
+  renderAiResult(result);
+ }catch(error){
+  $('ai-status').textContent='请求失败';$('ai-error').textContent=error.message;
+ }finally{button.disabled=false}
+}
+function renderAiResult(result){
+ const box=$('ai-result');box.replaceChildren();
+ const analysis=result.analysis;
+ if(!analysis){
+  const warn=document.createElement('div');warn.className='notice';
+  warn.textContent=`模型输出无法解析为结构化结果（${result.parse_error??'未知原因'}），以下为原文，请人工判读。`;
+  box.appendChild(warn);
+  const pre=document.createElement('pre');pre.className='notice';pre.textContent=result.raw??'（空）';box.appendChild(pre);
+ }else{
+  const p=analysis.position||{};
+  box.appendChild(aiSection('头寸意见',[['方向',AI_STANCE[p.stance]??p.stance],['工具',p.instrument],
+   ['|Delta|区间',p.delta_range],['DTE区间',p.dte_range],['止损参考',p.stop]]));
+  box.appendChild(aiBullets('依据',p.reasoning));
+  box.appendChild(aiBullets('失效条件',analysis.invalidations));
+  const heading=document.createElement('h4');heading.textContent='支撑 / 压力位对照';box.appendChild(heading);
+  box.appendChild(aiLevelsTable(result));
+  const levelNote=document.createElement('div');levelNote.className='notice';
+  levelNote.textContent='本地价位来自真实月合约历史、可复现；模型价位不可复现，差异>1% 仅作提示，不判定谁对。'
+   +((result.local_levels?.notes||[]).length?('本地备注：'+result.local_levels.notes.join('；')):'');
+  box.appendChild(levelNote);
+  const industry=analysis.industry||{};
+  box.appendChild(aiBullets('产业逻辑与当前状况',[industry.summary].concat(industry.drivers||[]),
+   '模型固有知识 · 官方 API 无联网检索 · 可能过时'));
+  if(industry.uncertainty)box.appendChild(aiBullets('模型自述不确定性',[industry.uncertainty]));
+  box.appendChild(aiBullets('风险',analysis.risks));
+  box.appendChild(aiBullets('数据缺口',analysis.data_gaps));
+  const disclaimer=document.createElement('div');disclaimer.className='notice';
+  disclaimer.textContent=(analysis.disclaimer?('模型声明：'+analysis.disclaimer+' '):'')+'本分析是研究参考，不构成交易指令。';
+  box.appendChild(disclaimer);
+ }
+ if((result.limitations||[]).length){
+  const limits=document.createElement('div');limits.className='notice';limits.textContent='系统限制：'+result.limitations.join(' ');
+  box.appendChild(limits);
+ }
+ const meta=document.createElement('div');meta.className='muted small';
+ meta.textContent=`模型 ${result.model??'—'} · 生成于 ${new Date().toLocaleString()} · 用时 ${result.elapsed_ms==null?'—':result.elapsed_ms+'ms'}`
+  +` · token ${JSON.stringify(result.usage||{})}`;
+ box.appendChild(meta);
 }
 function setDirection(value){
  direction=value;detailCode=null;$('scan-detail').hidden=true;$('structure-detail').hidden=true;
- [['dir-long','long'],['dir-short','short'],['dir-extended','extended'],['dir-radar','radar'],['dir-structure','structure']].forEach(([id,key])=>{
+ [['dir-long','long'],['dir-short','short'],['dir-extended','extended'],['dir-radar','radar'],['dir-structure','structure'],['dir-custom','custom']].forEach(([id,key])=>{
   $(id).classList.toggle('active',value===key);$(id).setAttribute('aria-selected',value===key)});
- const radar=value==='radar',structure=value==='structure';
+ const radar=value==='radar',structure=value==='structure',custom=value==='custom';
  $('scan-wrap').hidden=radar||structure;$('radar-wrap').hidden=!radar;$('structure-wrap').hidden=!structure;
- if(radar)renderRadar();else if(structure)renderStructure();else renderList();
+ $('custom-controls').hidden=!custom;
+ if(radar)renderRadar();else if(structure)renderStructure();else if(custom)loadCustom();else renderList();
 }
 function dimText(d){
  if(!d||d.status!=='ok')return '缺失';
@@ -368,7 +505,11 @@ async function init(){
   enableTableSorting($('structure-wrap').querySelector('table'));
   decorateHeaders();
   renderList();
-  $('dir-long').onclick=()=>setDirection('long');$('dir-short').onclick=()=>setDirection('short');$('dir-extended').onclick=()=>setDirection('extended');$('dir-radar').onclick=()=>setDirection('radar');$('dir-structure').onclick=()=>setDirection('structure');
+  $('dir-long').onclick=()=>setDirection('long');$('dir-short').onclick=()=>setDirection('short');$('dir-extended').onclick=()=>setDirection('extended');$('dir-radar').onclick=()=>setDirection('radar');$('dir-structure').onclick=()=>setDirection('structure');$('dir-custom').onclick=()=>setDirection('custom');
+  Object.keys(data.names).sort().forEach(code=>{const option=document.createElement('option');option.value=code;option.textContent=`${data.names[code]} · ${code}`;$('custom-code').appendChild(option)});
+  $('custom-code').onchange=()=>{const code=$('custom-code').value;const record=(data.records||[]).find(r=>r.ts_code===code);$('custom-side').value=record&&record.trend_direction==='short'?'short':'long'};
+  $('load-custom').onclick=loadCustom;
+  $('custom-side').onchange=()=>{if(direction==='custom'&&$('custom-code').value)loadCustom()};
   $('close-detail').onclick=()=>{detailCode=null;$('scan-detail').hidden=true};
   $('close-structure').onclick=()=>{$('structure-detail').hidden=true};
   await mountToolbar();

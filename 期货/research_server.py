@@ -73,6 +73,71 @@ def latest_available_asof(root):
     dates=available_snapshots(root)
     return dates[0]['asof'] if dates else None
 
+def candidate_view(store,asof,code,direction=None):
+    """任意品种的候选行：与 build_scanner 的 long/short 行同源同形，供自定义品种页签使用。"""
+    from option_scanner import scan_one, structure_radar, radar_row
+    payload=store.get(asof)
+    rows=[r for r in payload.get('records',[]) if r.get('ts_code')==code]
+    if not rows:raise DataError(f'该日期没有品种 {code}')
+    record=next((r for r in rows if r.get('direction')==direction),None) if direction else None
+    if record is None:record=rows[0]
+    direction=record.get('direction')
+    options=store.option_payload(asof)
+    chain=[r for r in options.get('records',[]) if r.get('main_code')==code]
+    return dict(candidate=scan_one(record,direction,chain),direction=direction,code=code,
+        name=record.get('name'),main_code=record.get('main_code'),
+        structure=structure_radar(record),radar=radar_row(record))
+
+def real_levels(root,code,main_code):
+    """真实月合约（未复权）的支撑压力位；只看当前主力合约自身历史，避免跨换月污染。"""
+    from price_levels import compute_levels
+    path=Path(root)/'processed/pair_history'/(code.replace('.','_')+'.csv')
+    if not path.exists():
+        return dict(last=None,atr14=None,main_code=main_code,support=[],resistance=[],coverage=0,
+            notes=['缺少真实月合约历史（processed/pair_history），无法计算支撑压力位'])
+    frame=read_csv(path)
+    if main_code and 'ts_code' in frame.columns:
+        subset=frame[frame.ts_code.eq(main_code)]
+        if len(subset):frame=subset
+    return compute_levels(frame,main_code=main_code)
+
+def ai_context(store,asof,view,levels):
+    """组装喂给大模型的"事实"上下文：技术面 + 商品结构 + 期权 + 本地价位，缺失项显式标注。"""
+    cand=view['candidate'];metrics=cand.get('metrics') or {}
+    structure=view.get('structure') or {}
+    decision=next((d for d in (store.get(asof).get('decisions') or []) if d.get('ts_code')==view['code']),None) or {}
+    chain={r.get('ts_code'):r for r in (store.option_payload(asof).get('records') or [])
+        if r.get('main_code')==view['code']}
+    picks=[]
+    for pick in cand.get('contracts') or []:
+        row=chain.get(pick.get('ts_code')) or {}
+        tradability=row.get('tradability') or {}
+        picks.append(dict(合约=pick.get('ts_code'),档位=pick.get('tier'),方向='Call' if pick.get('call_put')=='C' else 'Put',
+            行权价=pick.get('exercise_price'),剩余天数=pick.get('days_to_expiry'),Delta=pick.get('delta'),
+            Gamma=pick.get('gamma'),Theta每日=pick.get('theta'),参考IV=pick.get('iv_reference'),
+            成交量=pick.get('vol'),持仓量=pick.get('oi'),可做性分=tradability.get('score'),
+            可做性标签=tradability.get('tags'),是否逆趋势=tradability.get('counter_trend')))
+    return dict(asof=asof,
+        品种=dict(代码=view['code'],名称=view.get('name'),真实主力合约=view.get('main_code'),分析方向=view['direction']),
+        价格=dict(真实合约最新价=levels.get('last'),ATR14=levels.get('atr14')),
+        技术面=dict(趋势状态=decision.get('trend_state_label'),生命周期=decision.get('state_v2'),
+            期权门控=decision.get('trend_option_gate'),阶段=cand.get('phase'),阶段原因=cand.get('phase_reason'),
+            阶段持续交易日=cand.get('phase_age'),爆发指数=cand.get('explosion_score'),
+            爆发指数分解={k:v.get('score') for k,v in (cand.get('items') or {}).items()},
+            组合信号=f"{cand.get('signals_met')}/{cand.get('signals_applicable')}",四重共振=cand.get('resonance'),
+            方向RPS20=metrics.get('rps20'),RPS加速度=metrics.get('rps_accel'),ADX=metrics.get('adx'),
+            ADX五日变化=metrics.get('adx_slope'),五日涨跌=metrics.get('return5'),OI五日变化=metrics.get('oi_change5'),
+            量比=metrics.get('volume_ratio'),ATR分位=metrics.get('atr_percentile'),偏离MA20_ATR=metrics.get('extension_atr')),
+        商品结构=dict(结构方向=structure.get('dominant'),多头结构分=structure.get('long_score'),
+            空头结构分=structure.get('short_score'),结构质量=structure.get('quality'),背离=structure.get('divergence'),
+            覆盖维度=structure.get('coverage'),资金=structure.get('oi'),现货基差=structure.get('basis'),
+            跨期月差=structure.get('spread'),期限结构=structure.get('term'),库存=structure.get('inventory')),
+        期权候选合约=picks,
+        本地支撑压力位=dict(说明='本地用真实月合约历史计算，作为事实基准',支撑=levels.get('support'),
+            压力=levels.get('resistance'),备注=levels.get('notes')),
+        数据缺口=['现货/基差与库存未接入（除非已导入 fundamentals.csv）','没有买卖盘口，无法判断可成交价格与滑点',
+            '无IV历史分位，只有 IV−HV20 溢价'])
+
 def valid_date(value):
     if not isinstance(value,str) or len(value)!=8 or not value.isdigit():raise ValueError('日期必须为YYYYMMDD')
     datetime.strptime(value,'%Y%m%d');return value
@@ -304,6 +369,10 @@ def main():
                     top=min(max(int(params.get('top',['5'])[0]),1),10)
                     self.respond(build_scanner(store.get(asof),store.option_payload(asof),top))
                 elif parsed.path=='/api/options/underlying':self.respond(store.underlying(asof,params.get('code',[''])[0]))
+                elif parsed.path=='/api/candidate':
+                    code=params.get('code',[''])[0]
+                    if not code:raise ValueError('缺少 code 参数')
+                    self.respond(candidate_view(store,asof,code,params.get('direction',[None])[0]))
                 elif parsed.path=='/api/runs':self.respond([json.loads(path.read_text(encoding='utf-8')) for path in sorted((store.root/'processed/filter_runs').glob('*.json'),reverse=True)][:30])
                 elif parsed.path=='/api/template':self.respond(dict(columns=['ts_code','trade_date','available_date','underlying_code','quote_unit','source','spot_price','commodity_oi'],records=[]))
                 elif parsed.path.startswith('/api/'):self.respond(dict(error='Unknown API'),404)
@@ -327,6 +396,19 @@ def main():
                     with store.lock:
                         if store.job['status'] in ['queued','running']:raise ValueError('已有任务运行，暂不修改补充数据')
                         result=import_supplements(store.root,request['records']);result['job']=store.begin('reload',dict(asof=store.active));self.respond(result,202)
+                elif path=='/api/ai/analyze':
+                    from ai_analysis import analyze, configured, LIMITATIONS
+                    if not configured():raise ValueError('未配置 DEEPSEEK_API_KEY，请在项目 .env 中填写后重启服务')
+                    ai_asof=valid_date(request.get('asof',store.active));code=request.get('code')
+                    if not code:raise ValueError('缺少 code 参数')
+                    started=datetime.now()
+                    view=candidate_view(store,ai_asof,code,request.get('direction'))
+                    levels=real_levels(store.root,code,view.get('main_code'))
+                    result=analyze(ai_context(store,ai_asof,view,levels))
+                    result.update(asof=ai_asof,code=code,direction=view['direction'],name=view.get('name'),
+                        main_code=view.get('main_code'),local_levels=levels,
+                        elapsed_ms=int((datetime.now()-started).total_seconds()*1000),limitations=LIMITATIONS)
+                    self.respond(result)
                 elif path=='/api/runs':
                     from research_rules import validate_rules,rule_matches
                     config=request['config'];validate_rules(config['rules'],config['match'],LABELS);asof=valid_date(request.get('asof',store.active));payload=store.get(asof)
