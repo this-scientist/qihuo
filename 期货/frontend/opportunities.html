@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>期权机会总览 · 商品期货</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-mark">↗</span> 商品期货 <span class="muted">/ 期权机会总览</span></div>
+  <div id="data-date" class="muted">读取数据…</div>
+</header>
+<main class="page-main option-workspace">
+  <div class="heading">
+    <div>
+      <div class="eyebrow">OPTION OPPORTUNITIES</div>
+      <h1>期权机会总览</h1>
+      <p class="muted">全市场可做性达标的期权按品种一次分组列出，不必再逐个品种翻 T 型报价。点击合约跳转期权观察页看走势与到期损益。</p>
+    </div>
+    <div class="actions"><a class="workflow-link" href="/">返回市场雷达</a><button id="refresh-options">采集期权链</button></div>
+  </div>
+
+  <div class="notice compact-notice">默认只显示可做性≥65（良）、顺势、到期 7–120 天的合约，每组列评分最高的 5 张。可放宽到≥50 或查看末日轮；逆趋势合约评分硬封顶 55，勾选包含时需同时把阈值切到「≥50 可关注」。</div>
+
+  <div class="research-controls compact-controls">
+    <label>可做性阈值
+      <select id="min-score">
+        <option value="50">≥50 可关注</option>
+        <option value="65" selected>≥65 良好</option>
+        <option value="80">≥80 优选</option>
+      </select>
+    </label>
+    <label>方向
+      <select id="side-filter">
+        <option value="all">全部</option>
+        <option value="C">看涨认购 Call</option>
+        <option value="P">看跌认沽 Put</option>
+      </select>
+    </label>
+    <label class="inline-label"><input type="checkbox" id="aligned-only" checked> 仅顺势（隐藏逆趋势）<small id="aligned-hint" class="muted"></small></label>
+    <label>搜索品种<input id="product-search" type="search" placeholder="名称 / 代码"></label>
+  </div>
+  <div class="scan-controls compact-controls" id="dte-band" role="tablist" aria-label="到期区间">
+    <button data-band="7,120" class="active">7–120天（默认）</button>
+    <button data-band="0,10">0–10天 · 末日轮</button>
+    <button data-band="11,30">11–30天</button>
+    <button data-band="31,60">31–60天</button>
+    <button data-band="61,120">61–120天</button>
+  </div>
+
+  <div id="opp-error" class="page-error" role="alert"></div>
+  <div class="decision-band">
+    <div class="decision-summary">
+      <div><span>可做品种</span><strong id="stat-products">—</strong></div>
+      <div><span>可做合约</span><strong id="stat-contracts">—</strong></div>
+      <div><span>认购 Call</span><strong id="stat-calls">—</strong></div>
+      <div><span>认沽 Put</span><strong id="stat-puts">—</strong></div>
+    </div>
+    <div class="decision-focus"><span id="opp-status" class="muted small"></span></div>
+  </div>
+
+  <div id="opp-empty" class="loading-panel" hidden></div>
+  <div id="opp-list" class="opp-list"></div>
+
+  <details class="quality"><summary>评分口径与限制</summary><div id="opp-note" class="notice"></div>
+    <div id="opp-coverage" class="notice"></div>
+  </details>
+</main>
+<script type="module" src="/opportunities.mjs"></script>
+</body>
+</html>

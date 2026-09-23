@@ -241,8 +241,9 @@ class ResearchStore:
                 missing=next((item['missing_exchanges'] for item in result.get('partial_days',[]) if item['trade_date']==asof),[])
                 self.progress('补齐历史与换月校正')
                 prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
-                self.progress('验证指标并写入数据库');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
+                self.progress('验证指标并发布快照');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
                 if not payload['quality']['success']:raise DataError('有效篮子不足，保留原数据库数据')
+                payload=publish_snapshot(self.root,payload,source)
                 if not mysql_cache_put(asof,'api:data',payload):raise DataError('写入 MySQL 失败，请检查数据库连接')
                 with self.lock:
                     self.active,self.payload=asof,ensure_decision_payload(payload)
@@ -354,6 +355,10 @@ def main():
     store=ResearchStore(args.data_dir,valid_date(asof));frontend=Path(__file__).with_name('frontend')
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*params,**kwargs):super().__init__(*params,directory=str(frontend),**kwargs)
+        def end_headers(self):
+            target=self.path.split('?',1)[0]
+            if target=='/' or target.endswith(('.html','.mjs','.js','.css')):self.send_header('Cache-Control','no-cache')
+            super().end_headers()
         def respond(self,value,status=200):
             payload=json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8');self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
         def do_GET(self):
@@ -364,6 +369,9 @@ def main():
                 elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=available_snapshots(store.root)))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))
+                elif parsed.path=='/api/options/opportunities':
+                    from option_scanner import build_opportunities
+                    self.respond(build_opportunities(store.get(asof),store.option_payload(asof)))
                 elif parsed.path=='/api/scanner':
                     from option_scanner import build_scanner
                     top=min(max(int(params.get('top',['5'])[0]),1),10)

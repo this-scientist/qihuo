@@ -11,6 +11,7 @@ from historical_validation import historical_panels
 from dataclasses import asdict
 from decision_v2 import build_decisions, unify_records
 from trend_model import MODEL_VERSION
+from futures_signals import chart_signals, signal_for_history
 
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
 PERCENT_FIELDS = {'return1','return5','return20','return60','return120','slope20','slope60','slope120',
@@ -112,11 +113,14 @@ def build_payload(root, asof,phase_settings=None):
     selected, histories, exclusions, _ = load_inputs(root, asof, Settings())
     snapshot = selected[selected.role.eq('main')].set_index('main_code').to_dict('index')
     common = sorted(set.intersection(*(set(h.trade_date) for h in histories.values())))[-251:]
-    curves, moving = {}, {}
+    curves, moving, candles, technical_signals = {}, {}, {}, {}
     for code, table in histories.items():
         shared = table.set_index('trade_date').loc[common]
         curves[code] = [[day, round(float(value),6)] for day,value in shared.close.items()]
+        candles[code] = [[day, round(float(row['open']),6), round(float(row['high']),6), round(float(row['low']),6), round(float(row['close']),6)]
+                         for day,row in shared.iterrows()]
         moving[code] = {key:[round(float(v),6) if pd.notna(v) else None for v in shared[key]] for key in ['ma20','ma60','ma120']}
+        technical_signals[code] = chart_signals(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]
     phase_settings=phase_settings or PhaseSettings()
@@ -131,6 +135,7 @@ def build_payload(root, asof,phase_settings=None):
     factors = [dict(key=key,label=value[0],group=value[1],unit=value[2],type='boolean' if key in BOOLEAN_FIELDS else 'number') for key,value in LABELS.items()]
     for record in records:
         record['name'], record['sector'] = names[record['ts_code']], classify(record['ts_code'])
+        record.update(signal_for_history(histories[record['ts_code']]))
         bar = snapshot.get(record['ts_code'], {})
         pre_settle, close = bar.get('pre_settle'), bar.get('close')
         record['day_change'] = ((float(close)/float(pre_settle)-1)*100
@@ -160,8 +165,11 @@ def build_payload(root, asof,phase_settings=None):
         record['curvature'] = curvature(rows[0]['settle'],rows[1]['settle'],rows[2]['settle']) if len(rows)>=3 else None
     decisions = build_decisions(records)
     unify_records(records, decisions)
+    for decision in decisions:
+        decision.update(signal_for_history(histories[decision['ts_code']]))
     decision_summary = {state: sum(1 for row in decisions if row['state_v2'] == state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
-    return dict(asof=asof, names=names, records=records, curves=curves, moving=moving,
+    return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
+        technical_signals=technical_signals,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=aggregate_curves(curves), factors=factors, quality=quality, exclusions=exclusions,
         phase_settings=asdict(phase_settings),supplemental_status=supplemental_status,

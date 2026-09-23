@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from option_analysis import black76, greeks, option_metrics
-from option_scanner import build_scanner, radar_row, scan_one, pick_contracts, annotate_options, structure_radar
+from option_scanner import build_scanner, radar_row, scan_one, pick_contracts, annotate_options, structure_radar, build_opportunities
 
 
 FUTURE, VOL, RATE = 100.0, 0.25, 0.02
@@ -508,6 +508,68 @@ class StructureRadarTests(unittest.TestCase):
         self.assertIn('structure', result)
         self.assertEqual(result['structure'][0]['ts_code'], 'JM.DCE')
         self.assertIn('structure_note', result)
+
+
+class OpportunityTests(unittest.TestCase):
+    def _report(self, rows, records, floor=50.0):
+        payload = {'asof': '20260918', 'records': records}
+        option_payload = {'records': rows, 'status': '已采集'}
+        annotate_options(payload, option_payload)
+        return build_opportunities(payload, option_payload, floor=floor)
+
+    def test_group_meta_counts_trim_and_sort(self):
+        chain = [option_row(100, 'C', dte=5), option_row(100, 'P', dte=5)]
+        report = self._report(chain, [strong_record('long')])
+        self.assertEqual(len(report['groups']), 1)
+        group = report['groups'][0]
+        self.assertEqual(group['main_code'], 'JM.DCE')
+        self.assertEqual(group['name'], '焦煤')
+        self.assertEqual(group['sector'], '黑色')
+        self.assertEqual(group['trend_direction'], 'long')
+        self.assertEqual(group['count'], 2)
+        self.assertEqual(group['call_count'], 1)
+        self.assertEqual(group['put_count'], 1)
+        # 逆趋势 Put 封顶55但仍保留在下发数据中（前端默认隐藏、可显式打开）。
+        self.assertEqual(group['counter_count'], 1)
+        # 组内按可做性分降序，第一名为顺势 Call。
+        scores = [c['score'] for c in group['contracts']]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertEqual(group['contracts'][0]['call_put'], 'C')
+        self.assertEqual(group['best_score'], scores[0])
+        # 展示字段已裁剪：不带走 gamma/vega 等未展示列。
+        self.assertNotIn('gamma', group['contracts'][0])
+        self.assertIn('iv_premium_pct', group['contracts'][0])
+        self.assertTrue(report['note'])
+
+    def test_groups_ranked_by_best_score(self):
+        jm = [option_row(100, 'C', dte=5)]
+        b_row = strong_record('long')
+        b_row.update(ts_code='B.DCE', name='豆二', main_code='B2609.DCE')
+        b_chain = [dict(option_row(100, 'C', dte=40), ts_code='B2609-C-100.DCE',
+            underlying_code='B2609.DCE', main_code='B.DCE')]
+        report = self._report(jm + b_chain, [strong_record('long'), b_row])
+        codes = [g['main_code'] for g in report['groups']]
+        self.assertEqual(codes, ['JM.DCE', 'B.DCE'])
+        best = [g['best_score'] for g in report['groups']]
+        self.assertEqual(best, sorted(best, reverse=True))
+        self.assertEqual(report['groups'][1]['name'], '豆二')
+
+    def test_floor_filters_and_missing_score_excluded(self):
+        chain = [option_row(100, 'C', dte=5)]
+        records = [strong_record('long')]
+        self.assertEqual(self._report(chain, records, floor=99.0)['groups'], [])
+        report = self._report(chain, records, floor=0.0)
+        self.assertEqual(report['groups'][0]['count'], 1)
+        # 缺 Greeks 的合约评分为 None，任何 floor 下都不进组。
+        broken = option_row(100, 'C', dte=5)
+        broken['gamma'] = None
+        self.assertEqual(self._report([broken], records, floor=0.0)['groups'], [])
+
+    def test_uncollected_status_passthrough(self):
+        option_payload = {'records': [], 'status': '尚未采集该日期期权数据'}
+        report = build_opportunities({'asof': '20260918', 'records': []}, option_payload)
+        self.assertEqual(report['status'], option_payload['status'])
+        self.assertEqual(report['groups'], [])
 
 
 if __name__ == '__main__':

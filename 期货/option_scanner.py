@@ -775,3 +775,65 @@ def build_scanner(payload, options, top=5):
     result['structure'] = structure
     result['structure_note'] = STRUCTURE_NOTE
     return result
+
+
+# 期权机会总览：服务端只下发可关注（>=50）以上合约，前端再按阈值/方向/到期即时过滤。
+OPPORTUNITY_FLOOR = 50.0
+OPPORTUNITY_NOTE = ('期权机会总览把全市场可做性≥50（可关注）以上的期权按品种一次分组列出，组内按可做性分降序；'
+    '页面默认再收紧到≥65（良）且仅顺势、到期7–120天。逆趋势合约发动机半折且硬封顶55，默认隐藏，需手动打开。'
+    '所有数值为日线收盘参考值，无买卖盘口，不构成可执行买入清单。')
+_OPPORTUNITY_FIELDS = ['ts_code', 'underlying_code', 'call_put', 'exercise_price', 'maturity_date',
+    'days_to_expiry', 'delta', 'premium', 'premium_per_lot', 'iv_reference', 'vol', 'oi', 'role',
+    'multiplier', 'underlying_close', 'moneyness_pct']
+
+
+def _opportunity_contract(row):
+    tb = row.get('tradability') or {}
+    out = {key: row.get(key) for key in _OPPORTUNITY_FIELDS}
+    out.update(score=tb.get('score'), grade=tb.get('grade'), tags=tb.get('tags') or [],
+        counter_trend=bool(tb.get('counter_trend')), aligned=tb.get('aligned'),
+        depth=tb.get('depth'), iv_premium_pct=tb.get('iv_premium_pct'), explosion=tb.get('explosion'))
+    return out
+
+
+def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
+    """全市场可做期权按品种聚合（期权机会总览页数据源）。
+
+    只保留带可做性评分且 >=floor 的合约并裁剪到展示字段；分组元数据（名称/大类/趋势阶段/
+    决策状态）取自期货记录。逆趋势合约保留（封顶55），由前端默认隐藏、可显式打开。
+    """
+    meta = {}
+    for record in payload.get('records', []):
+        code = record.get('ts_code')
+        if code and code not in meta:
+            meta[code] = record
+    groups = {}
+    for row in option_payload.get('records', []):
+        tb = row.get('tradability') or {}
+        score = tb.get('score')
+        if not _finite(score) or score < floor:
+            continue
+        code = row.get('main_code')
+        group = groups.get(code)
+        if group is None:
+            base = meta.get(code) or {}
+            group = dict(main_code=code, name=base.get('name') or tb.get('underlying_name'),
+                sector=base.get('sector'), trend_direction=base.get('trend_direction') or tb.get('trend_direction'),
+                phase=base.get('phase') or tb.get('phase'), state_v2=base.get('state_v2'), contracts=[])
+            groups[code] = group
+        group['contracts'].append(_opportunity_contract(row))
+    result = []
+    for group in groups.values():
+        contracts = sorted(group['contracts'], key=lambda c: (-c['score'], -(c['depth'] or 0), c['ts_code']))
+        group['contracts'] = contracts
+        group['best_score'] = contracts[0]['score']
+        group['count'] = len(contracts)
+        group['call_count'] = sum(1 for c in contracts if c['call_put'] == 'C')
+        group['put_count'] = group['count'] - group['call_count']
+        group['counter_count'] = sum(1 for c in contracts if c['counter_trend'])
+        result.append(group)
+    result.sort(key=lambda g: (-g['best_score'], g['main_code'] or ''))
+    return dict(asof=payload.get('asof') or option_payload.get('asof'),
+        status=option_payload.get('status'), floor=floor, note=OPPORTUNITY_NOTE, groups=result,
+        coverage=option_payload.get('coverage', []), failures=option_payload.get('failures', []),
+        limitations=option_payload.get('limitations', []))

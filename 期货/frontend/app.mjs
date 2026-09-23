@@ -1,4 +1,4 @@
-import {renderChart} from './charts.mjs';
+import {renderChart,renderCandlestickChart} from './charts.mjs';
 import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
 
@@ -49,6 +49,7 @@ const directionText=value=>DIRECTION_LABELS[value]||value||'—';
 const optionActionText=value=>OPTION_ACTION_LABELS[value]||value||'—';
 const optionGateText=value=>OPTION_GATE_LABELS[value]||value||'—';
 const structureText=value=>STRUCTURE_LABELS[value]||value||'—';
+const signalClass=row=>row.signal_side==='long'?'up':row.signal_side==='short'?'down':'muted';
 const rows=()=>data.decisions||data.records||[];
 const codeOf=row=>row.ts_code;
 const isLong=row=>row.decision_side==='long'||row.decision_direction==='LONG';
@@ -107,6 +108,7 @@ function decisionTable(source,limit=80,compact=false){
   <td class="${tone(row.rps_accel)}">${signed(row.rps_accel)}</td>
   <td class="${dirScore(row)>0?'up':dirScore(row)<0?'down':''}">${signed(row.dir_score)}</td>
   <td>${row.trend_state_label||'—'}</td>
+  <td class="${signalClass(row)}">${row.signal_label||'—'}<span class="contract">${row.today_support!=null&&row.today_resistance!=null?`支 ${fmt(row.today_support)} / 阻 ${fmt(row.today_resistance)}`:'—'}</span></td>
   <td title="因子覆盖 ${fmt(row.burst_coverage)}%">${fmt(row.burst_score)}</td>
   <td>${count(row.main_oi)}</td><td>${count(row.pair_oi)}</td>
   <td class="${tone(row.oi_change5)}">${pct(row.oi_change5)}</td>
@@ -116,7 +118,7 @@ function decisionTable(source,limit=80,compact=false){
   <td>${signed(row.structure_score)}<span class="contract">覆盖 ${fmt(row.structure_evidence?.group_coverage)}%</span></td>
   <td><button class="mini-action" data-action="options" data-code="${codeOf(row)}">T型</button></td>
  </tr>`).join('');
- return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>结构方向</th><th>${term('当日%','day')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="20" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
+ return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>结构方向</th><th>${term('当日%','day')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="21" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
 }
 function filteredRows(){return rows().filter(row=>(state.sector==='all'||row.sector===state.sector)&&(state.side==='all'||row.decision_side===state.side)&&(state.stage==='all'||row.state_v2===state.stage)&&`${row.name} ${row.ts_code} ${row.main_code}`.toLowerCase().includes(state.search.toLowerCase()))}
 function renderMarket(){
@@ -130,7 +132,7 @@ function renderCandidates(){
  app.innerHTML=header()+`<section class="decision-panel"><div class="candidate-tabs">${tabs.map(tab=>`<button data-candidate-tab="${tab}" class="${state.candidateTab===tab?'active':''}">${stateText(tab)}<span>${rows().filter(row=>row.state_v2===tab).length}</span></button>`).join('')}</div>${decisionTable(source)}</section>`;
 }
 function metricBlocks(row){
- const items=[['趋势方向',directionText(row.decision_side)],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
+ const items=[['趋势方向',directionText(row.decision_side)],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div>`;
 }
 function renderDetail(){
@@ -138,7 +140,7 @@ function renderDetail(){
  if(!row){app.innerHTML=header()+'<p class="empty">当前日期暂无商品数据</p>';return}
  app.innerHTML=header()+`<section class="detail-layout">
   <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / 均线',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
-  <article class="decision-panel chart-card"><div class="section-heading"><h2>日线收盘与均线</h2></div><div id="single-chart"></div></article>
+  <article class="decision-panel chart-card"><div class="section-heading"><h2>日线K线与均线</h2></div><div id="single-chart"></div></article>
   <article class="decision-panel"><h2>量仓</h2><div class="structure-grid">${[['主力OI（手）',count(row.main_oi)],['次主力OI（手）',count(row.secondary_oi)],['主次合计OI（手）',count(row.pair_oi)],['固定月对OI 5日',pct(row.oi_change5)],['固定月对OI 20日',pct(row.oi_change20)],['成交量比',fmt(row.volume_ratio)],['量价表现',row.structure_evidence?.oi?.state],['移仓迹象',row.rollover_transfer?'有':row.rollover_transfer===false?'无':'缺失'],['席位多空持仓','未接入']].map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div></article>
   <article class="decision-panel"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>
  </section>`;
@@ -244,10 +246,8 @@ function sectorSeries(sector){
  return points[0].map((point,index)=>[point[0],points.reduce((sum,values)=>sum+values[index][1]/values[0][1]*100,0)/points.length]);
 }
 function renderSingleChart(row){
- if(!data.curves?.[codeOf(row)])return;
- const values=data.curves[codeOf(row)];
- const moving=data.moving?.[codeOf(row)]||{};
- renderChart($('single-chart'),[{id:codeOf(row),label:row.name,values},...['ma20','ma60','ma120'].filter(key=>moving[key]).map(key=>({id:key,label:key.toUpperCase(),values:values.map((point,index)=>[point[0],moving[key][index]])}))],{window:Number($('window')?.value||60),price:true,title:`${row.name}复权收盘与均线`});
+ if(!data.candles?.[codeOf(row)])return;
+ renderCandlestickChart($('single-chart'),{candles:data.candles[codeOf(row)],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[]},{window:Number($('window')?.value||60),title:`${row.name}日线K线与均线`});
 }
 function render(){
  if(!data)return;
@@ -280,7 +280,7 @@ function wireRows(){
  }));
 }
 function csvFor(source){
- const fields=['ts_code','name','sector','main_code','decision_direction','day_change','return1','return5','return20','rps5','rps20','rps_accel','dir_score','trend_state_label','burst_score','burst_coverage','main_oi','secondary_oi','pair_oi','oi_change5','oi_change20','volume_ratio','near_code','far_code','spread','spread_change5','structure','carry_annualized','carry_change5','structure_direction','structure_score','structure_confirm','option_action'];
+ const fields=['ts_code','name','sector','main_code','decision_direction','signal_label','today_support','today_resistance','tomorrow_breakout','tomorrow_reversal','day_change','return1','return5','return20','rps5','rps20','rps_accel','dir_score','trend_state_label','burst_score','burst_coverage','main_oi','secondary_oi','pair_oi','oi_change5','oi_change20','volume_ratio','near_code','far_code','spread','spread_change5','structure','carry_annualized','carry_change5','structure_direction','structure_score','structure_confirm','option_action'];
  return '\ufeff'+[fields.join(','),...source.map(row=>fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`).join(','))].join('\r\n');
 }
 async function init(){
@@ -288,6 +288,7 @@ async function init(){
   data=await api('/api/data'+(asofQuery()?'?'+asofQuery():''));
   $('data-date').textContent=`收盘日 ${data.asof.slice(0,4)}.${data.asof.slice(4,6)}.${data.asof.slice(6)} · ${rows().length}条决策`;
   document.querySelectorAll('.top-tabs button').forEach(button=>button.addEventListener('click',()=>setView(button.dataset.view)));
+  const oppLink=$('nav-opportunities');if(oppLink)oppLink.href='/opportunities.html'+(asofQuery()?'?'+asofQuery():'');
   await mountToolbar().catch(()=>{});
   render();
  }catch(error){

@@ -31,7 +31,7 @@ export async function mountToolbar(){
  for(const [href,label] of [['/','商品总览'],['/research.html','历史验证']]){if(href==='/'&&document.querySelector('.top-tabs'))continue;const a=document.createElement('a');a.href=href+(location.search||'');a.textContent=label;if(location.pathname===href)a.className='active';links.appendChild(a)}
  const more=document.createElement('details');more.className='more-tools';
  const summary=document.createElement('summary');summary.textContent='专项工具';more.appendChild(summary);
- for(const [href,label] of [['/scanner.html','期权扫描 / 结构复核'],['/options.html','期权观察']]){const a=document.createElement('a');a.href=href+(location.search||'');a.textContent=label;more.appendChild(a)}
+ for(const [href,label] of [['/opportunities.html','期权机会总览'],['/scanner.html','期权扫描 / 结构复核'],['/options.html','期权观察']]){const a=document.createElement('a');a.href=href+(location.search||'');a.textContent=label;more.appendChild(a)}
  links.appendChild(more);
  header.insertBefore(links,header.lastElementChild);
  const controls=document.createElement('div');controls.className='data-toolbar';

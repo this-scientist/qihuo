@@ -13,7 +13,7 @@ const GLOSSARY={
  '持仓量（手）':'未平仓合约手数，代表市场深度；太小则买卖难以成交。',
 };
 const tips=mountTips(GLOSSARY);
-const $=id=>document.getElementById(id);let data,chain,filtered=[],toolbar,detailRequest=0,filterRequest=0;
+const $=id=>document.getElementById(id);let data,chain,filtered=[],toolbar,detailRequest=0,filterRequest=0,autoOpenCode=null;
 const fmt=value=>value==null?'—':Number(value).toFixed(2);
 const DIR_TEXT={long:'多头',short:'空头',neutral:'震荡'};
 const ns='http://www.w3.org/2000/svg';
@@ -99,14 +99,24 @@ async function apply(){
   if(!filtered.length){const row=document.createElement('tr'),td=document.createElement('td');td.colSpan=8;td.className='empty';td.textContent=chain.records.length?'当前条件下无匹配期权：可降低"只看可做性"阈值、扩大天数区间或放宽量仓条件':chain.status||'该日期期权链尚未采集';row.appendChild(td);$('option-rows').appendChild(row)}
   $('option-coverage').textContent=`${chain.status}；${chain.coverage?.filter(item=>!item.underlying_code).map(item=>`${item.exchange} ${item.count}条`).join('；')||'无覆盖报告'}；失败 ${chain.failures?.length||0}。`+(chain.failures?.map(f=>`${f.exchange} ${f.underlying_code||''} ${f.reason}`).join('；')||'');$('option-limitations').textContent=(chain.limitations||[]).join('；');
   $('option-context').textContent=`数据日期 ${data.asof} · 到期剩余 ${settings['min-days']}–${settings['max-days']} 个自然日（含两端） · 点击任一期权查看对应真实月份走势。`;
-  if(filtered.length)show(filtered[0],false);
+  const target=autoOpenCode?filtered.find(option=>option.ts_code===autoOpenCode):null;
+  if(target){show(target,false);autoOpenCode=null}
+  else if(filtered.length)show(filtered[0],false);
  }catch(error){if(request===filterRequest)$('option-error').textContent=error.message}finally{if(request===filterRequest)$('apply-options').disabled=false}
 }
 async function init(){
  try{
   data=await api('/api/data'+(asofQuery()?'?'+asofQuery():''));$('data-date').textContent=`收盘日 ${data.asof} · 独立期权观察`;
   Object.keys(data.names).sort().forEach(code=>{const option=document.createElement('option');option.value=code;option.textContent=`${data.names[code]} · ${code}`;$('option-code').appendChild(option)});
-  const code=new URLSearchParams(location.search).get('code');if(code&&data.names[code]){$('option-code').value=code;const trend=data.records.find(r=>r.ts_code===code);if(trend.trend_direction==='short')$('option-side').value='P'}
+  const params=new URLSearchParams(location.search);
+  const code=params.get('code');
+  if(code&&data.names[code]){$('option-code').value=code;const trend=data.records.find(r=>r.ts_code===code);if(!params.has('side')&&trend.trend_direction==='short')$('option-side').value='P'}
+  // 支持从期权机会总览等页面带筛选参数/指定合约深链。
+  [['min_days','min-days'],['max_days','max-days'],['min_vol','min-vol'],['min_oi','min-oi'],
+   ['max_distance','max-distance'],['reference_rate','reference-rate'],
+   ['side','option-side'],['role','option-role'],['align','align-mode'],['min_score','min-score']]
+   .forEach(([key,id])=>{if(params.has(key))$(id).value=params.get(key)});
+  autoOpenCode=params.get('ts_code');
   enableTableSorting(document.querySelector('.table-wrap table'));
   tips.decorate();
   document.querySelectorAll('[data-days]').forEach(button=>button.onclick=()=>{const [min,max]=button.dataset.days.split(',');$('min-days').value=min;$('max-days').value=max;apply()});
