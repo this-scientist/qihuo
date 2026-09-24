@@ -1,6 +1,7 @@
 import {renderChart,renderCandlestickChart} from './charts.mjs';
 import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
+import {buildOpportunityRows} from './opportunity-workbench.mjs';
 
 const $=id=>document.getElementById(id);
 const app=$('app');
@@ -180,8 +181,39 @@ function decisionTable(source,limit=80,compact=false){
  return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>结构方向</th><th>${term('当日%','day')}</th><th>${term('实时价','quote')}</th><th>${term('可执行性','exec')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('大类内强度','sector')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="24" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
 }
 function filteredRows(){return rows().filter(row=>(state.sector==='all'||row.sector===state.sector)&&(state.side==='all'||row.decision_side===state.side)&&(state.stage==='all'||row.state_v2===state.stage)&&`${row.name} ${row.ts_code} ${row.main_code}`.toLowerCase().includes(state.search.toLowerCase()))}
+const QUEUE_META={
+ focus:['重点研究','方向与状态更清楚，优先打开详情复核'],
+ wait:['等待位置','逻辑可看，但当前位置或延伸度不适合追'],
+ watch:['启动观察','已有部分证据，等待更多信号补齐'],
+ avoid:['风险回避','结构冲突、衰竭、期权风险或数据缺口较重']
+};
+function optionBadge(status){
+ const cls=status.status==='usable'?'up':status.status==='avoid'?'down':status.status==='watch'?'sector-counter':'muted';
+ const detail=status.best?.ts_code?`<span>${status.best.ts_code}</span>`:'';
+ return `<small class="option-status ${cls}">${status.label}${detail}</small>`;
+}
+function opportunityCard(item){
+ const row=item.record;
+ const sideClass=item.side==='long'?'up':item.side==='short'?'down':'muted';
+ return `<article class="opportunity-card queue-${item.queue}" data-code="${item.code}">
+  <header><div><strong>${item.name}</strong><span>${item.mainCode} · ${item.sector}</span></div><em class="${sideClass}">${directionText(item.side)} · ${stateText(item.state)}</em></header>
+  <p class="opportunity-action">${item.action}</p>
+  <ul>${(item.reasons.length?item.reasons:['暂无足够证据']).map(reason=>`<li>${reason}</li>`).join('')}</ul>
+  <div class="opportunity-risk"><span>风险</span>${item.risk}</div>
+  <footer>${optionBadge(item.optionStatus)}<button class="mini-action" data-code="${item.code}" data-action="detail">详情</button><button class="mini-action" data-code="${item.code}" data-action="options">T型</button></footer>
+ </article>`;
+}
+function opportunitySection(key,items){
+ const [title,note]=QUEUE_META[key];
+ const shown=items.slice(0,key==='avoid'?8:6);
+ return `<section class="opportunity-queue"><div class="section-heading"><div><h2>${title}<span class="queue-count">${items.length}</span></h2><div class="muted small">${note}</div></div></div><div class="opportunity-grid">${shown.length?shown.map(opportunityCard).join(''):`<div class="empty mini">暂无${title}标的</div>`}</div></section>`;
+}
+function renderOpportunityWorkbench(){
+ const queues=buildOpportunityRows(data,state.execution||{},state.optionChain||{records:[]});
+ return `<section class="workbench-panel">${['focus','wait','watch','avoid'].map(key=>opportunitySection(key,queues[key])).join('')}</section>`;
+}
 function renderMarket(){
- app.innerHTML=header()+statCards()+`<section class="commodity-section"><div class="commodity-filters"><input id="commodity-search" type="search" aria-label="搜索商品" placeholder="商品 / 合约"><select id="sector-filter" aria-label="所属大类"><option value="all">全部大类</option>${[...new Set(rows().map(r=>r.sector))].map(s=>`<option>${s}</option>`).join('')}</select><select id="side-filter" aria-label="趋势方向"><option value="all">全部方向</option><option value="long">偏多</option><option value="short">偏空</option><option value="neutral">中性</option></select><select id="stage-filter" aria-label="趋势阶段"><option value="all">全部阶段</option>${Object.entries(STATE_LABELS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><span id="result-count" class="muted small">${filteredRows().length} 个品种</span><span id="quote-status" class="muted small"></span></div><div id="commodity-results">${decisionTable(filteredRows())}</div></section><section class="chart-section decision-panel"><div class="section-heading"><h2>大类等权走势</h2></div><div id="chart"></div></section>`;
+ app.innerHTML=header()+statCards()+renderOpportunityWorkbench()+`<section class="commodity-section"><div class="section-heading"><div><h2>全市场矩阵</h2><div class="muted small">完整因子表保留在这里，用于深筛和复核。</div></div></div><div class="commodity-filters"><input id="commodity-search" type="search" aria-label="搜索商品" placeholder="商品 / 合约"><select id="sector-filter" aria-label="所属大类"><option value="all">全部大类</option>${[...new Set(rows().map(r=>r.sector))].map(s=>`<option>${s}</option>`).join('')}</select><select id="side-filter" aria-label="趋势方向"><option value="all">全部方向</option><option value="long">偏多</option><option value="short">偏空</option><option value="neutral">中性</option></select><select id="stage-filter" aria-label="趋势阶段"><option value="all">全部阶段</option>${Object.entries(STATE_LABELS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><span id="result-count" class="muted small">${filteredRows().length} 个品种</span><span id="quote-status" class="muted small"></span></div><div id="commodity-results">${decisionTable(filteredRows())}</div></section><section class="chart-section decision-panel"><div class="section-heading"><h2>大类等权走势</h2></div><div id="chart"></div></section>`;
  $('commodity-search').value=state.search;$('sector-filter').value=state.sector;$('side-filter').value=state.side;$('stage-filter').value=state.stage;
  renderSectorChart();
 }
@@ -338,6 +370,11 @@ function wireRows(){
   if(!row)return;
   selectRow(row,action==='options'?'options':node.dataset.viewTarget||'detail');
  }));
+ document.querySelectorAll('.opportunity-card [data-action]').forEach(button=>button.addEventListener('click',event=>{
+  event.stopPropagation();
+  const row=rows().find(item=>codeOf(item)===button.dataset.code);
+  if(row)selectRow(row,button.dataset.action==='options'?'options':'detail');
+ }));
 }
 function csvFor(source){
  const fields=['ts_code','name','sector','main_code','decision_direction','signal_label','today_support','today_resistance','tomorrow_breakout','tomorrow_reversal','day_change','return1','return5','return20','rps5','rps20','rps_accel','dir_score','trend_state_label','burst_score','burst_coverage','main_oi','secondary_oi','pair_oi','oi_change5','oi_change20','volume_ratio','near_code','far_code','spread','spread_change5','structure','carry_annualized','carry_change5','structure_direction','structure_score','structure_confirm','option_action'];
@@ -396,6 +433,8 @@ async function init(){
   await mountToolbar().catch(()=>{});
   render();
   await refreshQuotes();
+  render();
+  ensureOptions().then(()=>{if(state.view==='market')render()});
   if(quoteTimer)clearInterval(quoteTimer);
   quoteTimer=setInterval(()=>{if(document.visibilityState==='visible'&&inTradingSession())refreshQuotes()},QUOTE_REFRESH_MS);
  }catch(error){
