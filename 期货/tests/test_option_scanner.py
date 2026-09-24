@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from option_analysis import black76, greeks, option_metrics
+from option_scenario import classify_rr, option_scenario, stage_horizon
 from option_scanner import build_scanner, radar_row, scan_one, pick_contracts, annotate_options, structure_radar, build_opportunities
 
 
@@ -66,6 +67,46 @@ def tb_row(code, delta, gamma, dte, iv=22.0, hv20=24.0, vol=3000, oi=5000, side=
         days_to_expiry=dte, underlying_close=FUTURE, premium=1.0, multiplier=60.0, premium_per_lot=60.0,
         vol=vol, oi=oi, moneyness_pct=5.0, iv_reference=iv, hv20=hv20, hv60=22.0,
         model_approximation=True, delta=delta, gamma=gamma, vega=0.1, theta=-0.02)
+
+
+class ScenarioTests(unittest.TestCase):
+    def record(self, state='START'):
+        return dict(state_v2=state, close=100.0, raw_close=100.0,
+            tomorrow_support=95.0, tomorrow_resistance=110.0,
+            tomorrow_breakout=112.0, tomorrow_reversal=92.0)
+
+    def test_stage_horizons_and_rr_boundaries(self):
+        self.assertEqual(stage_horizon('START'), 5)
+        self.assertEqual(stage_horizon('PREPARE'), 10)
+        self.assertEqual(stage_horizon('TREND'), 10)
+        self.assertIsNone(stage_horizon('WAIT'))
+        self.assertEqual(classify_rr(3.0), '强烈信号')
+        self.assertEqual(classify_rr(2.0), '可做')
+        self.assertEqual(classify_rr(1.2), '观察')
+        self.assertEqual(classify_rr(1.19), '不可做')
+
+    def test_call_uses_nearest_resistance_and_support_with_three_iv_scenarios(self):
+        option = option_row(100, 'C', dte=30)
+        result = option_scenario(self.record(), option, 'long')
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['target_underlying'], 110.0)
+        self.assertEqual(result['stop_underlying'], 95.0)
+        self.assertEqual(set(result['target_prices']), {'conservative', 'base', 'optimistic'})
+        self.assertTrue(all(value >= 0 for value in result['target_prices'].values()))
+        self.assertGreaterEqual(result['conservative_rr'], 0)
+
+    def test_put_mirrors_target_and_stop(self):
+        option = option_row(100, 'P', dte=30)
+        result = option_scenario(self.record('TREND'), option, 'short')
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['target_underlying'], 95.0)
+        self.assertEqual(result['stop_underlying'], 110.0)
+
+    def test_insufficient_dte_blocks_scenario(self):
+        option = option_row(100, 'C', dte=7)
+        result = option_scenario(self.record('PREPARE'), option, 'long')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('到期时间不足', result['reason'])
 
 
 class TenbaggerTests(unittest.TestCase):
