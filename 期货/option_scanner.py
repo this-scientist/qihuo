@@ -52,7 +52,7 @@ NOTES = [
     '过度延伸观察单独列出阶段判定为"过度延伸"的品种（双向，按爆发指数排名）；主榜单仍以启动/持续候选为主，延伸品种在主榜"趋势·阶段"列同样标注。',
     '反转雷达为品种级观察（与方向扫描互补）：强势衰退=五日前RPS20≥90且五日下滑≥15（跌破70升级）；衰退排列=RPS20<RPS60<RPS120且RPS120≥80；扩散翻多/翻空=三周期RPS同步升降且形成对应阶梯；价涨仓减按趋势背景定性——下跌趋势中=回补反弹（空头平仓推动，勿当反转追多），多头趋势中=减仓上行（新资金未接力的资金背离警示，不是看空信号），无趋势背景才泛称疑似空头回补。基差与库存未接入，期限确认仅用期货Carry。',
     '期权全部为日线收盘参考值，无买卖盘口与价差；合约挑选不构成可执行买入清单。',
-    '合约档位：主仓|Delta| 0.20–0.55、彩票仓|Delta| 0.08–0.20；期限优先20–60自然日，池内无合约时依次放宽到10–60、7–120天并在档位标注；不足7天的近月直接排除。',
+    '合约档位：先要求成交量>2000且持仓量>1000，再选主仓|Delta| 0.20–0.55、彩票仓|Delta| 0.08–0.20；期限优先20–60自然日，池内无合约时依次放宽到10–60、7–120天并在档位标注；不足7天的近月直接排除。',
     '10倍潜力模型=品种发动机80分（趋势启动25/RPS15/ADX10/OI+成交10/基本面10/IV状态10，缺失归一）＋合约层20分（Gamma-Delta10/DTE5/流动性5）。合约只选|Delta|0.10–0.40、DTE7–30的轻中度虚值：|Delta|0.15–0.30与DTE7–15为甜区（兼具便宜与Gamma爆发力，标的无需极端行情即可穿越执行价）。IV相对HV20溢价>30%判为"已透支"（方向对也可能被Vega反吃）；总分≥80为高潜力、60–80中、<60低。核心逻辑：大方向×行情够快×买得早×Gamma够大×IV未提前透支。',
 ]
 
@@ -108,14 +108,14 @@ def _best(pool_records, target_delta):
 
 
 def pick_contracts(chain, direction):
-    """主仓 |Delta| 0.20–0.55 + 彩票仓 |Delta| 0.08–0.20；期限优先20–60自然日，依次放宽10–60、7–120；要求量仓与参考IV有效。"""
+    """挑选方向、期限、Delta与严格量仓门槛均合格的参考合约。"""
     side = 'C' if direction == 'long' else 'P'
     candidates = []
     for row in chain:
         dte, vol, oi, delta, iv = row.get('days_to_expiry'), row.get('vol'), row.get('oi'), row.get('delta'), row.get('iv_reference')
         if row.get('call_put') != side or not _finite(dte, vol, oi, delta, iv):
             continue
-        if not 7 <= dte <= 120 or vol <= 0 or oi <= 0:
+        if not 7 <= dte <= 120 or vol <= MIN_OPTION_VOLUME or oi <= MIN_OPTION_OI:
             continue
         row['_abs_delta'] = abs(delta)
         candidates.append(row)
@@ -145,7 +145,7 @@ def _tb_iv_label(premium_pct):
 
 
 def _tb_pool(chain, direction):
-    """10倍候选池：方向正确、轻中度虚值(|Delta|0.10–0.40)、DTE7–30、量仓为正。"""
+    """10倍候选池：方向、Delta、DTE与严格量仓门槛全部合格。"""
     side = 'C' if direction == 'long' else 'P'
     pool = []
     for row in chain:
@@ -153,7 +153,8 @@ def _tb_pool(chain, direction):
             continue
         dte, vol, oi, delta, iv, gamma = (row.get(k) for k in
             ['days_to_expiry', 'vol', 'oi', 'delta', 'iv_reference', 'gamma'])
-        if not _finite(dte, vol, oi, delta, iv, gamma) or vol <= 0 or oi <= 0:
+        if (not _finite(dte, vol, oi, delta, iv, gamma)
+                or vol <= MIN_OPTION_VOLUME or oi <= MIN_OPTION_OI):
             continue
         ad = abs(delta)
         if TB_DELTA_BAND[0] <= ad <= TB_DELTA_BAND[1] and TB_DTE_BAND[0] <= dte <= TB_DTE_BAND[1]:
@@ -268,7 +269,8 @@ def _signals(record, direction, metrics, reference):
         'term': (bool(d * carry > 0 and d * carry5 >= 0) if _finite(carry5) else bool(d * carry > 0))
             if _finite(carry) else (d * sp > 0 if _finite(sp) else None),
         'iv_not_hot': iv_assessment(iv, hv20)['not_hot'],
-        'liquidity_ok': liquidity >= 1000 if _finite(liquidity) else None,
+        'liquidity_ok': (reference['vol'] > MIN_OPTION_VOLUME and reference['oi'] > MIN_OPTION_OI)
+            if reference is not None else None,
     }
 
 

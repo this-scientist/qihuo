@@ -202,6 +202,19 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(pick_contracts(near, 'long')[0], [])
         self.assertEqual(pick_contracts(far, 'long')[0], [])
 
+    def test_scanner_contract_picks_use_strict_volume_and_oi_gates(self):
+        low_volume = [option_row(100, 'C', vol_lots=2000, oi_lots=5000)]
+        low_oi = [option_row(100, 'C', vol_lots=3000, oi_lots=1000)]
+        qualified = [option_row(100, 'C', vol_lots=2001, oi_lots=1001)]
+        self.assertEqual(pick_contracts(low_volume, 'long')[0], [])
+        self.assertEqual(pick_contracts(low_oi, 'long')[0], [])
+        picks, reference = pick_contracts(qualified, 'long')
+        self.assertTrue(picks)
+        self.assertIsNotNone(reference)
+        result = scan_one(strong_record('long'), 'long', low_volume)
+        self.assertEqual(result['tenbagger']['contracts'], [])
+        self.assertIsNone(result['signals']['liquidity_ok'])
+
     def test_preferred_band_wins_over_outer_band(self):
         # 20–60天与91–120天合约同时存在时，优先档命中且不带放宽标注。
         chain = [option_row(strike, side, dte=40) for side in ['C', 'P'] for strike in range(100, 113, 2)]
