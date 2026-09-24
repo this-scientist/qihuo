@@ -164,5 +164,12 @@ tr.opp-counter{opacity:.6}
 .review-grid .wide{grid-column:1/-1}
 .settings-list{display:grid;gap:12px;margin-top:12px}
 .settings-list label{display:grid;grid-template-columns:1fr 160px;gap:10px;align-items:center}
+.sector-counter{color:#b3541e;background:#fdf1e7;font-weight:600}
+.quote-cell{white-space:nowrap;border-left:1px dashed var(--line);border-right:1px dashed var(--line)}
+.exec-cell{white-space:nowrap;border-right:1px dashed var(--line)}
+.exec-strong{font-weight:600;color:#1f5f8b}
+.exec-mid{color:#253247}
+.exec-weak{color:var(--muted)}
+.quote-metrics{display:contents}
 @media(max-width:1100px){.app-header{align-items:flex-start;flex-direction:column;padding-top:14px;padding-bottom:12px}.top-tabs{max-width:100%;width:100%}.radar-grid,.detail-layout,.review-grid,.option-workbench{grid-template-columns:1fr}.page-hero{align-items:flex-start;flex-direction:column}.hero-actions{justify-content:flex-start}.alert-row{grid-template-columns:1fr}.alert-row small{text-align:left}}
 @media(max-width:700px){.trading-shell{padding:20px 14px}.radar-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-card strong{font-size:22px}.detail-metrics{gap:12px}.structure-grid,.review-stats,.underlying-state{grid-template-columns:1fr}.settings-list label{grid-template-columns:1fr}.top-tabs button{padding:8px}.page-hero h1{font-size:24px}.t-chain table{min-width:720px}}

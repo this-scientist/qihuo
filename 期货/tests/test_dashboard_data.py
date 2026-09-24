@@ -1,6 +1,6 @@
 import unittest
 import pandas as pd
-from dashboard_data import classify, aggregate_curves, public_metrics
+from dashboard_data import classify, aggregate_curves, public_metrics, sector_trend, sector_relative_strength
 
 
 class DashboardTests(unittest.TestCase):
@@ -33,6 +33,63 @@ class DashboardTests(unittest.TestCase):
         values=aggregate_curves(curves)['黑色']['values']
         self.assertEqual(values[0],['20260910',100.0])
         self.assertAlmostEqual(values[-1][1],100)
+
+
+def group_of(values):
+    return {'members':[], 'count':0, 'values':[[str(20260100+index), value] for index, value in enumerate(values)]}
+
+
+class SectorStrengthTests(unittest.TestCase):
+    def test_sector_trend_reads_the_index_not_member_votes(self):
+        falling=[100-index*0.5 for index in range(26)]
+        self.assertEqual(sector_trend(falling)[0],'short')
+        self.assertEqual(sector_trend(list(reversed(falling)))[0],'long')
+        self.assertEqual(sector_trend([100.0]*26)[0],'flat')
+        self.assertEqual(sector_trend([100,101])[0],'unknown')
+
+    def test_short_sector_scores_the_heaviest_faller_highest(self):
+        group=group_of([100-index*0.5 for index in range(26)])
+        members=[dict(ts_code='J.DCE',sector='黑色',return20=-8.0,decision_side='short'),
+                 dict(ts_code='RB.SHF',sector='黑色',return20=-5.0,decision_side='short'),
+                 dict(ts_code='I.DCE',sector='黑色',return20=-1.0,decision_side='neutral'),
+                 dict(ts_code='HC.SHF',sector='黑色',return20=2.0,decision_side='long')]
+        fields=sector_relative_strength({'黑色':group},members)
+        self.assertEqual(fields['J.DCE']['sector_direction'],'short')
+        self.assertAlmostEqual(fields['J.DCE']['sector_strength'],100.0)
+        self.assertAlmostEqual(fields['RB.SHF']['sector_strength'],66.67,places=1)
+        self.assertAlmostEqual(fields['I.DCE']['sector_strength'],33.33,places=1)
+        self.assertEqual([fields[code]['sector_rank'] for code in ['J.DCE','RB.SHF','I.DCE','HC.SHF']],[1,2,3,4])
+
+    def test_counter_sector_rows_are_negated_by_reverse_strength(self):
+        """取负的必须是反向强度：最强的逆势者要取得最负的分值，而不是最接近 0。"""
+        group=group_of([100-index*0.5 for index in range(26)])
+        members=[dict(ts_code='J.DCE',sector='黑色',return20=-8.0,decision_side='short'),
+                 dict(ts_code='RB.SHF',sector='黑色',return20=0.0,decision_side='long'),
+                 dict(ts_code='HC.SHF',sector='黑色',return20=6.0,decision_side='long')]
+        fields=sector_relative_strength({'黑色':group},members)
+        self.assertTrue(fields['HC.SHF']['sector_counter'])
+        self.assertTrue(fields['RB.SHF']['sector_counter'])
+        self.assertFalse(fields['J.DCE']['sector_counter'])
+        self.assertAlmostEqual(fields['HC.SHF']['sector_strength'],-100.0)
+        self.assertLess(fields['HC.SHF']['sector_strength'],fields['RB.SHF']['sector_strength'])
+        self.assertLess(fields['RB.SHF']['sector_strength'],0)
+
+    def test_flat_sector_never_marks_a_row_as_counter(self):
+        fields=sector_relative_strength({'黑色':group_of([100.0]*26)},
+            [dict(ts_code='RB.SHF',sector='黑色',return20=5.0,decision_side='long'),
+             dict(ts_code='I.DCE',sector='黑色',return20=-5.0,decision_side='short')])
+        self.assertEqual(fields['RB.SHF']['sector_direction'],'flat')
+        self.assertFalse(fields['RB.SHF']['sector_counter'])
+        self.assertFalse(fields['I.DCE']['sector_counter'])
+        self.assertAlmostEqual(fields['RB.SHF']['sector_strength'],100.0)
+        self.assertAlmostEqual(fields['I.DCE']['sector_strength'],0.0)
+
+    def test_single_member_sector_has_no_percentile(self):
+        fields=sector_relative_strength({'其他':group_of([100-index*0.5 for index in range(26)])},
+            [dict(ts_code='EC.INE',sector='其他',return20=3.0,decision_side='long')])
+        self.assertEqual(fields['EC.INE']['sector_members'],1)
+        self.assertIsNone(fields['EC.INE']['sector_strength'])
+        self.assertEqual(fields['EC.INE']['sector_rank'],1)
 
 
 if __name__=='__main__': unittest.main()

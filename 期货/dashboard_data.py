@@ -54,6 +54,66 @@ def aggregate_curves(curves):
     return groups
 
 
+SECTOR_TREND_FLOOR = 0.15
+
+
+def sector_trend(values):
+    """大类方向：等权指数 MA20 相对五个交易日前的变化率（%）。"""
+    if len(values) < 26:
+        return 'unknown', None
+    current, earlier = sum(values[-20:]) / 20, sum(values[-25:-5]) / 20
+    if not earlier:
+        return 'unknown', None
+    slope = (current - earlier) / earlier * 100
+    if slope > SECTOR_TREND_FLOOR:
+        return 'long', slope
+    if slope < -SECTOR_TREND_FLOOR:
+        return 'short', slope
+    return 'flat', slope
+
+
+def _sector_percentile(values, target):
+    count = len(values)
+    if count < 2:
+        return None
+    below = sum(1 for value in values if value < target) + 0.5 * (sum(1 for value in values if value == target) - 1)
+    return below / (count - 1) * 100
+
+
+def sector_relative_strength(groups, members):
+    """大类内相对强度：品种相对大类等权指数的20日超额收益在类内排分位，按大类方向翻转。
+
+    与大类方向相反的品种取负（取负的是反向强度，保证整列从 -100 单调到 +100），
+    否则最强反向的品种会显示成接近 0，反而最不显眼。
+    """
+    fields = {}
+    for name, group in groups.items():
+        index_values = [value for _, value in group['values']]
+        direction, _ = sector_trend(index_values)
+        index_return = (index_values[-1] / index_values[-21] - 1) * 100 if len(index_values) > 21 else None
+        subset = [row for row in members if row.get('sector') == name]
+        excess = {row['ts_code']: (row['return20'] - index_return
+            if index_return is not None and row.get('return20') is not None else None) for row in subset}
+        valid = sorted(value for value in excess.values() if value is not None)
+        scored = {}
+        for row in subset:
+            code = row['ts_code']
+            percentile = _sector_percentile(valid, excess[code]) if excess[code] is not None else None
+            aligned = None if percentile is None else (100 - percentile if direction == 'short' else percentile)
+            counter = ((direction == 'long' and row.get('decision_side') == 'short')
+                       or (direction == 'short' and row.get('decision_side') == 'long'))
+            if counter and aligned is not None:
+                aligned = -(100 - aligned)
+            scored[code] = dict(excess=excess[code], strength=aligned, counter=counter)
+        order = sorted(subset, key=lambda row: (-(scored[row['ts_code']]['strength'] or 0), row['ts_code']))
+        for position, row in enumerate(order, 1):
+            value = scored[row['ts_code']]
+            fields[row['ts_code']] = dict(sector_direction=direction, sector_members=len(subset),
+                sector_excess20=value['excess'], sector_strength=value['strength'],
+                sector_counter=value['counter'], sector_rank=position)
+    return fields
+
+
 LABELS = {
     'close':('复权收盘','价格 / 均线',''), 'raw_close':('真实主力收盘','价格 / 均线',''),
     'ma20':('MA20','价格 / 均线',''), 'ma60':('MA60','价格 / 均线',''), 'ma120':('MA120','价格 / 均线',''),
@@ -102,6 +162,8 @@ LABELS = {
 LABELS.update({'technical_start':('技术启动阶段','趋势阶段',''),'phase_match':('阶段方向与筛选方向一致','趋势阶段',''),
     'phase_age':('当前阶段持续交易日','趋势阶段','日'),'phase_extension_atr':('当前趋势方向偏离MA20','趋势阶段','ATR'),
     'commodity_oi_change5':('外部全品种OI五日变化','补充数据','%'),'commodity_oi_change20':('外部全品种OI二十日变化','补充数据','%')})
+LABELS.update({'sector_strength':('大类内相对强度','相对强弱',''),
+    'sector_excess20':('相对大类等权超额20日','相对强弱','%')})
 BOOLEAN_FIELDS = {key for key in LABELS if key.startswith(('signal_','break'))} | {'confirmed','startup_eligible'}
 BOOLEAN_FIELDS |= {'technical_start','phase_match','rollover_transfer','structure_flip5'}
 BOOLEAN_FIELDS |= {'v2_active','v2_trade_allowed','structure_support'}
@@ -168,9 +230,15 @@ def build_payload(root, asof,phase_settings=None):
     for decision in decisions:
         decision.update(signal_for_history(histories[decision['ts_code']]))
     decision_summary = {state: sum(1 for row in decisions if row['state_v2'] == state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
+    sector_groups = aggregate_curves(curves)
+    strength = sector_relative_strength(sector_groups, decisions)
+    unscored = dict(sector_direction='unknown', sector_members=0, sector_excess20=None,
+        sector_strength=None, sector_counter=False, sector_rank=None)
+    for row in records + decisions:
+        row.update(strength.get(row['ts_code'], unscored))
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
         technical_signals=technical_signals,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
-        sectors=aggregate_curves(curves), factors=factors, quality=quality, exclusions=exclusions,
+        sectors=sector_groups, factors=factors, quality=quality, exclusions=exclusions,
         phase_settings=asdict(phase_settings),supplemental_status=supplemental_status,
         scope='主次合约OI保持固定月对口径；外部全品种OI、现货/基差独立列示来源和覆盖', curve_scope='复权主连；大类为当前有效成分等权对比指数，非交易所指数')

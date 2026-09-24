@@ -366,6 +366,25 @@ def main():
             try:
                 asof=valid_date(params['asof'][0]) if 'asof' in params else store.active
                 if parsed.path=='/api/data':self.respond(store.get(asof))
+                elif parsed.path=='/api/quotes':
+                    # 盘中报价只读旁路：绝不写入 payload、MySQL 或快照，收盘口径的可复现性不受影响
+                    from realtime import snapshot
+                    payload=store.get(asof)
+                    rows=payload.get('decisions') or payload.get('records') or []
+                    codes=sorted({row['main_code'] for row in rows if row.get('main_code')})
+                    result=snapshot(codes)
+                    self.respond(dict(asof=asof,source='sina',requested=len(codes),count=len(result['quotes']),
+                        cached=result['cached'],error=result['error'],quotes=result['quotes']))
+                elif parsed.path=='/api/execution':
+                    # 盘中可执行性排名：日线次日价位叠加实时价的只读合成，同样不写入 payload / MySQL / 快照
+                    from intraday import snapshot_ranking
+                    payload=store.get(asof)
+                    rows=payload.get('decisions') or payload.get('records') or []
+                    codes=sorted({row['main_code'] for row in rows if row.get('main_code')})
+                    result=snapshot_ranking(rows,codes)
+                    self.respond(dict(asof=asof,source='sina',requested=len(codes),count=len(result['quotes']),
+                        cached=result['cached'],error=result['error'],
+                        quotes=result['quotes'],execution=result['execution']))
                 elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=available_snapshots(store.root)))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))
