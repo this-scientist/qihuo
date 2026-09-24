@@ -28,11 +28,14 @@ def strong_record(direction='long'):
     # 方向RPS20=92：多头原始RPS92，空头原始RPS8；五日前原始值保证方向加速度同为+14。
     raw_rps, prev_rps = (92.0, 78.0) if d else (8.0, 22.0)
     return dict(ts_code='JM.DCE', name='焦煤', sector='黑色', main_code='JM2609.DCE', direction=direction,
+        decision_side=direction, state_v2='START', structure_confirm='SUPPORT',
         trend_direction=direction, phase='趋势启动', trend_score=80.0, startup_score=75.0, startup_hits=7,
         directional_rps20=92.0, rps20=raw_rps, rps20_prev5=prev_rps, adx=24.0, adx_slope=4.0, plus_di=28.0 if d else 12.0,
         minus_di=12.0 if d else 28.0, break20_up=d, break55_up=d, break20_down=not d, break55_down=not d,
         signal_base_breakout=True, oi_change5=3.0, oi_change20=6.0, volume_ratio=1.5, spread_change5=5.0 if d else -5.0,
-        extension_atr=1.2, atr_percentile=60.0, return5=2.0 if d else -2.0)
+        extension_atr=1.2, atr_percentile=60.0, return5=2.0 if d else -2.0,
+        close=100.0, raw_close=100.0, tomorrow_support=95.0, tomorrow_resistance=110.0,
+        tomorrow_breakout=112.0, tomorrow_reversal=92.0)
 
 
 def weak_record(direction='long'):
@@ -357,7 +360,7 @@ class TradabilityTests(unittest.TestCase):
         return {r['ts_code']: r['tradability'] for r in rows}
 
     def test_aligned_atm_scores_high_and_carries_context(self):
-        chain = [option_row(100, 'C', dte=5), option_row(100, 'P', dte=5)]
+        chain = [option_row(100, 'C', dte=30), option_row(100, 'P', dte=30)]
         scores = self._annotated(chain, strong_record('long'))
         call = scores[chain[0]['ts_code']]
         self.assertGreaterEqual(call['score'], 65)
@@ -366,27 +369,30 @@ class TradabilityTests(unittest.TestCase):
         self.assertEqual(call['phase'], '趋势启动')
         self.assertIsNotNone(call['explosion'])
         self.assertIn('Gamma甜区', call['tags'])
-        self.assertIn('末日轮', call['tags'])
+        self.assertTrue(call['eligible'])
         self.assertNotIn('逆趋势', call['tags'])
 
     def test_counter_trend_capped_and_aligned_wins(self):
-        chain = [option_row(100, 'C', dte=5), option_row(100, 'P', dte=5)]
+        chain = [option_row(100, 'C', dte=30), option_row(100, 'P', dte=30)]
         scores = self._annotated(chain, strong_record('long'))
         call, put = scores[chain[0]['ts_code']], scores[chain[1]['ts_code']]
         # 顺势 Call：方向对齐，可进良/优。
         self.assertTrue(call['aligned'])
         self.assertFalse(call['counter_trend'])
-        # 逆趋势 Put：贴标签、发动机半折、硬封顶55，永不进良/优。
+        # 逆趋势 Put：保留原始结构分供诊断，但正式评分被硬门槛拦截。
         self.assertIn('逆趋势', put['tags'])
         self.assertFalse(put['aligned'])
         self.assertTrue(put['counter_trend'])
-        self.assertLessEqual(put['score'], 55)
-        self.assertIn(put['grade'], ['可关注', '弱'])
-        self.assertGreater(call['score'], put['score'])
+        self.assertFalse(put['eligible'])
+        self.assertIsNone(put['score'])
+        self.assertIsNotNone(put['raw_score'])
+        self.assertIn('逆趋势', put['block_reasons'])
+        self.assertGreater(call['score'], put['raw_score'])
 
     def test_neutral_trend_not_counter_aligned_none(self):
         record = strong_record('long')
         record['trend_direction'] = 'neutral'
+        record['decision_side'] = 'neutral'
         chain = [option_row(100, 'C', dte=12), option_row(100, 'P', dte=12)]
         scores = self._annotated(chain, record)
         for row in chain:
@@ -445,7 +451,9 @@ class TradabilityTests(unittest.TestCase):
         scores = self._annotated([row], None)
         tb = scores[row['ts_code']]
         self.assertIn('无标的评分', tb['tags'])
-        self.assertIsNotNone(tb['score'])  # 仍给出期权结构分，标的项归零
+        self.assertIsNone(tb['score'])
+        self.assertIsNotNone(tb['raw_score'])  # 仍给出期权结构分，标的项归零
+        self.assertFalse(tb['eligible'])
         self.assertEqual(tb['breakdown']['underlying'], 0)
 
     def test_score_sorts_high_to_low_in_realistic_chain(self):
@@ -453,11 +461,85 @@ class TradabilityTests(unittest.TestCase):
         chain = [option_row(strike, side, dte=dte)
                  for side in ['C', 'P'] for dte in (5, 40) for strike in range(88, 113, 4)]
         scores = self._annotated(chain, strong_record('long'))
-        ranked = sorted(chain, key=lambda r: scores[r['ts_code']]['score'], reverse=True)
+        eligible = [r for r in chain if scores[r['ts_code']]['eligible']]
+        ranked = sorted(eligible, key=lambda r: scores[r['ts_code']]['score'], reverse=True)
         top = scores[ranked[0]['ts_code']]
         self.assertEqual(top['direction'], 'long')
         self.assertNotIn('逆趋势', top['tags'])
         self.assertGreaterEqual(top['score'], 65)
+
+    def test_volume_and_oi_are_strict_hard_gates(self):
+        cases = [
+            (2000, 1001, False, '成交量不足'),
+            (2001, 1001, True, None),
+            (2001, 1000, False, '持仓量不足'),
+            (2001, 1001, True, None),
+        ]
+        for vol, oi, eligible, reason in cases:
+            row = option_row(100, 'C', vol_lots=vol, oi_lots=oi, dte=30)
+            tb = self._annotated([row], strong_record('long'))[row['ts_code']]
+            self.assertEqual(tb['eligible'], eligible, (vol, oi, tb))
+            if reason:
+                self.assertIn(reason, tb['block_reasons'])
+                self.assertIsNone(tb['score'])
+                self.assertEqual(tb['grade'], '不可做')
+
+    def test_missing_volume_or_oi_is_not_eligible(self):
+        for key in ['vol', 'oi']:
+            row = option_row(100, 'C', dte=30)
+            row[key] = None
+            tb = self._annotated([row], strong_record('long'))[row['ts_code']]
+            self.assertFalse(tb['eligible'])
+            self.assertIsNone(tb['score'])
+
+    def test_state_direction_and_structure_are_hard_gates(self):
+        variants = [
+            (dict(state_v2='WAIT'), '商品阶段不允许'),
+            (dict(state_v2='EXHAUST'), '趋势衰竭'),
+            (dict(structure_confirm='CONFLICT'), '商品结构冲突'),
+            (dict(decision_side='short', trend_direction='short'), '逆趋势'),
+        ]
+        for changes, reason in variants:
+            record = strong_record('long')
+            record.update(changes)
+            row = option_row(100, 'C', dte=30)
+            tb = self._annotated([row], record)[row['ts_code']]
+            self.assertFalse(tb['eligible'])
+            self.assertIn(reason, tb['block_reasons'])
+
+    def test_start_prepare_and_trend_reach_scenario_evaluation(self):
+        for state in ['START', 'PREPARE', 'TREND']:
+            record = strong_record('long')
+            record['state_v2'] = state
+            row = option_row(100, 'C', dte=45)
+            tb = self._annotated([row], record)[row['ts_code']]
+            self.assertEqual(tb['scenario']['status'], 'ok')
+            if state == 'PREPARE':
+                self.assertIn('酝酿候选', tb['tags'])
+
+    def test_directional_rows_are_not_overwritten_by_input_order(self):
+        long = strong_record('long')
+        long.update(directional_rps20=20.0, decision_side='long', trend_direction='long')
+        short = strong_record('short')
+        short.update(directional_rps20=95.0, decision_side='long', trend_direction='long')
+        chain_a = [option_row(100, 'C', dte=30), option_row(100, 'P', dte=30)]
+        chain_b = [dict(row) for row in chain_a]
+        payload_a = {'records': [long, short]}
+        payload_b = {'records': [short, long]}
+        annotate_options(payload_a, {'records': chain_a})
+        annotate_options(payload_b, {'records': chain_b})
+        by_side_a = {row['call_put']: row['tradability']['explosion'] for row in chain_a}
+        by_side_b = {row['call_put']: row['tradability']['explosion'] for row in chain_b}
+        self.assertEqual(by_side_a, by_side_b)
+
+    def test_iv_bucket_is_consistent_across_scanner_signal_and_contract(self):
+        record = strong_record('long')
+        option = tb_row('iv-consistency', .30, .02, 30, iv=45.0, hv20=40.0)
+        scan = scan_one(record, 'long', [option])
+        tb = self._annotated([option], record)[option['ts_code']]
+        self.assertEqual(scan['items']['iv']['score'], 8.0)
+        self.assertTrue(scan['signals']['iv_not_hot'])
+        self.assertEqual(tb['breakdown']['iv'], 8.0)
 
 
 class StructureRadarTests(unittest.TestCase):
@@ -559,7 +641,7 @@ class OpportunityTests(unittest.TestCase):
         return build_opportunities(payload, option_payload, floor=floor)
 
     def test_group_meta_counts_trim_and_sort(self):
-        chain = [option_row(100, 'C', dte=5), option_row(100, 'P', dte=5)]
+        chain = [option_row(100, 'C', dte=30), option_row(100, 'P', dte=30)]
         report = self._report(chain, [strong_record('long')])
         self.assertEqual(len(report['groups']), 1)
         group = report['groups'][0]
@@ -567,12 +649,11 @@ class OpportunityTests(unittest.TestCase):
         self.assertEqual(group['name'], '焦煤')
         self.assertEqual(group['sector'], '黑色')
         self.assertEqual(group['trend_direction'], 'long')
-        self.assertEqual(group['count'], 2)
+        self.assertEqual(group['count'], 1)
         self.assertEqual(group['call_count'], 1)
-        self.assertEqual(group['put_count'], 1)
-        # 逆趋势 Put 封顶55但仍保留在下发数据中（前端默认隐藏、可显式打开）。
-        self.assertEqual(group['counter_count'], 1)
-        # 组内按可做性分降序，第一名为顺势 Call。
+        self.assertEqual(group['put_count'], 0)
+        self.assertEqual(group['counter_count'], 0)
+        # 逆趋势合约在评分源头被拦截，组内只保留合资格Call。
         scores = [c['score'] for c in group['contracts']]
         self.assertEqual(scores, sorted(scores, reverse=True))
         self.assertEqual(group['contracts'][0]['call_put'], 'C')
@@ -583,7 +664,7 @@ class OpportunityTests(unittest.TestCase):
         self.assertTrue(report['note'])
 
     def test_groups_ranked_by_best_score(self):
-        jm = [option_row(100, 'C', dte=5)]
+        jm = [option_row(100, 'C', dte=30)]
         b_row = strong_record('long')
         b_row.update(ts_code='B.DCE', name='豆二', main_code='B2609.DCE')
         b_chain = [dict(option_row(100, 'C', dte=40), ts_code='B2609-C-100.DCE',
@@ -596,15 +677,37 @@ class OpportunityTests(unittest.TestCase):
         self.assertEqual(report['groups'][1]['name'], '豆二')
 
     def test_floor_filters_and_missing_score_excluded(self):
-        chain = [option_row(100, 'C', dte=5)]
+        chain = [option_row(100, 'C', dte=30)]
         records = [strong_record('long')]
         self.assertEqual(self._report(chain, records, floor=99.0)['groups'], [])
         report = self._report(chain, records, floor=0.0)
         self.assertEqual(report['groups'][0]['count'], 1)
         # 缺 Greeks 的合约评分为 None，任何 floor 下都不进组。
-        broken = option_row(100, 'C', dte=5)
+        broken = option_row(100, 'C', dte=30)
         broken['gamma'] = None
         self.assertEqual(self._report([broken], records, floor=0.0)['groups'], [])
+
+    def test_ineligible_contract_is_excluded_even_with_high_raw_score(self):
+        row = option_row(100, 'C', dte=30)
+        row['tradability'] = dict(eligible=False, score=99.0, grade='优',
+            block_reasons=['成交量不足'], signal_level='强烈信号',
+            scenario={'conservative_rr': 5.0})
+        report = build_opportunities({'asof': '20260918', 'records': [strong_record('long')]},
+            {'records': [row], 'status': '已采集'}, floor=0)
+        self.assertEqual(report['groups'], [])
+
+    def test_opportunities_sort_signal_then_rr_before_raw_score(self):
+        observe = option_row(98, 'C', dte=30)
+        strong = option_row(102, 'C', dte=30)
+        observe['tradability'] = dict(eligible=True, score=95.0, grade='优', tags=[],
+            signal_level='观察', scenario={'conservative_rr': 1.5})
+        strong['tradability'] = dict(eligible=True, score=70.0, grade='良', tags=[],
+            signal_level='强烈信号', scenario={'conservative_rr': 3.4})
+        report = build_opportunities({'asof': '20260918', 'records': [strong_record('long')]},
+            {'records': [observe, strong], 'status': '已采集'}, floor=0)
+        contracts = report['groups'][0]['contracts']
+        self.assertEqual(contracts[0]['ts_code'], strong['ts_code'])
+        self.assertEqual(contracts[0]['signal_level'], '强烈信号')
 
     def test_uncollected_status_passthrough(self):
         option_payload = {'records': [], 'status': '尚未采集该日期期权数据'}
