@@ -1,5 +1,5 @@
 import unittest
-from option_analysis import black76, implied_vol, option_metrics
+from option_analysis import black76, greeks, implied_vol, option_metrics
 
 
 class OptionsTests(unittest.TestCase):
@@ -14,6 +14,13 @@ class OptionsTests(unittest.TestCase):
         self.assertAlmostEqual(price,7.9655674554,places=8)
         self.assertAlmostEqual(implied_vol(price,100,100,1,0,'C'),.2,places=5)
         self.assertAlmostEqual(black76(100,100,1,0,.2,'P'),price)
+
+    def test_theta_matches_one_calendar_day_repricing(self):
+        for side in ['C', 'P']:
+            current = black76(100, 100, .5, .02, .25, side)
+            next_day = black76(100, 100, .5-1/365, .02, .25, side)
+            theta = greeks(100, 100, .5, .02, .25, side)['theta']
+            self.assertAlmostEqual(theta, next_day-current, places=4)
 
     def test_out_of_bound_price_is_not_iv(self):
         self.assertIsNone(implied_vol(101,100,100,1,0,'C'))
