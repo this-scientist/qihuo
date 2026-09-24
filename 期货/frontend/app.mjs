@@ -279,9 +279,10 @@ function optionCell(item,hot){
 function optionCandidates(row,chain){
  if(!['Call','Put'].includes(row.option_action))return [];
  const side=optionTargetSide(row);
- const candidates=(chain.records||[]).filter(item=>(item.main_code===codeOf(row)||item.underlying_code===row.main_code||item.underlying_code===row.secondary_code)&&item.call_put===side&&item.tradability?.counter_trend!==true);
+ const candidates=(chain.records||[]).filter(item=>(item.main_code===codeOf(row)||item.underlying_code===row.main_code||item.underlying_code===row.secondary_code)&&item.call_put===side&&item.tradability?.eligible===true);
  const inBand=item=>Number.isFinite(item.days_to_expiry)&&item.days_to_expiry>=7&&item.days_to_expiry<=45&&Number.isFinite(item.delta)&&Math.abs(item.delta)>=.1&&Math.abs(item.delta)<=.6;
- return candidates.filter(inBand).sort((a,b)=>(b.tradability?.score??-1)-(a.tradability?.score??-1)||Math.min(b.vol||0,b.oi||0)-Math.min(a.vol||0,a.oi||0)).slice(0,3);
+ const rank={强烈信号:0,可做:1,观察:2,不可做:3};
+ return candidates.filter(inBand).sort((a,b)=>(rank[a.tradability?.signal_level]??9)-(rank[b.tradability?.signal_level]??9)||(b.tradability?.scenario?.conservative_rr??-1)-(a.tradability?.scenario?.conservative_rr??-1)||(b.tradability?.score??-1)-(a.tradability?.score??-1)||Math.min(b.vol||0,b.oi||0)-Math.min(a.vol||0,a.oi||0)).slice(0,3);
 }
 function recommendationType(item,index){
  const d=Math.abs(item.delta||0);
@@ -294,7 +295,7 @@ function optionContextPanel(row,chain){
  const picks=optionCandidates(row,chain);
  const gate=row.trend_option_gate;
  const gateText=row.structure_confirm==='CONFLICT'?'价格趋势与商品结构背离。':gate==='BLOCK'?'当前阶段不新开仓。':gate==='CONDITIONAL'?'趋势延续，等待回调。':gate==='WATCH'?'趋势酝酿，等待确认。':'趋势窗口已通过。';
- return `<div class="option-workbench"><section class="underlying-state"><div><span>标的趋势 / 得分</span><strong>${directionText(row.decision_side)} · ${signed(row.dir_score)}</strong><small>${row.trend_state_label||'无趋势'} · ${gateText}</small></div><div><span>商品结构 / 期权动作</span><strong>${directionText(row.structure_direction)} · ${optionActionText(row.option_action)}</strong><small>RPS5 ${fmt(row.rps5)} · RPS20 ${fmt(row.rps20)} · ADX ${fmt(row.adx)} · OI 5日 ${pct(row.oi_change5)}</small></div></section><section class="recommend-panel"><h3>系统候选</h3>${picks.length?picks.map((item,index)=>`<div class="recommend-card"><span>${recommendationType(item,index)}</span><strong>${item.ts_code}</strong><small>分 ${item.tradability?.score??'—'} · Delta ${fmt(item.delta)} · DTE ${item.days_to_expiry} · IV ${fmt(item.iv_reference)} · 量/仓 ${fmt(item.vol)}/${fmt(item.oi)}</small></div>`).join(''):'<div class="empty mini">当前无通过标的与合约条件的候选。</div>'}</section></div>`;
+ return `<div class="option-workbench"><section class="underlying-state"><div><span>标的趋势 / 得分</span><strong>${directionText(row.decision_side)} · ${signed(row.dir_score)}</strong><small>${row.trend_state_label||'无趋势'} · ${gateText}</small></div><div><span>商品结构 / 期权动作</span><strong>${directionText(row.structure_direction)} · ${optionActionText(row.option_action)}</strong><small>RPS5 ${fmt(row.rps5)} · RPS20 ${fmt(row.rps20)} · ADX ${fmt(row.adx)} · OI 5日 ${pct(row.oi_change5)}</small></div></section><section class="recommend-panel"><h3>系统候选</h3>${picks.length?picks.map((item,index)=>{const tb=item.tradability||{},s=tb.scenario||{};return `<div class="recommend-card"><span>${tb.signal_level||recommendationType(item,index)} · ${recommendationType(item,index)}</span><strong>${item.ts_code}</strong><small>分 ${tb.score??'—'} · 保守盈亏比 ${fmt(s.conservative_rr)} · 标的目标/止损 ${fmt(s.target_underlying)}/${fmt(s.stop_underlying)}</small><small>期权目标价(0.9×IV) ${fmt(s.target_prices?.conservative)} · Delta ${fmt(item.delta)} · DTE ${item.days_to_expiry} · 量/仓 ${fmt(item.vol)}/${fmt(item.oi)}</small></div>`}).join(''):'<div class="empty mini">当前无通过方向、阶段、结构、量仓与盈亏比门槛的候选。</div>'}</section></div>`;
 }
 async function renderOptions(){
  const row=selectedRow();

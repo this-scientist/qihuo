@@ -26,6 +26,8 @@ export function optionExpressionStatus(record, optionRows = []){
   if(!candidates.length)return {status: 'missing', label: '无匹配期权链', best: null, risk: '该方向暂无可评估期权'};
 
   const ranked = [...candidates].sort((a, b) =>
+    Number(b.tradability?.eligible === true) - Number(a.tradability?.eligible === true) ||
+    ((b.tradability?.scenario?.conservative_rr ?? -1) - (a.tradability?.scenario?.conservative_rr ?? -1)) ||
     (b.tradability?.score ?? -1) - (a.tradability?.score ?? -1) ||
     (b.tradability?.depth ?? Math.min(b.vol ?? 0, b.oi ?? 0)) - (a.tradability?.depth ?? Math.min(a.vol ?? 0, a.oi ?? 0)) ||
     String(a.ts_code).localeCompare(String(b.ts_code)),
@@ -35,6 +37,10 @@ export function optionExpressionStatus(record, optionRows = []){
   const tags = tradability.tags || [];
   const depth = tradability.depth ?? Math.min(best.vol ?? 0, best.oi ?? 0);
   const dte = best.days_to_expiry;
+  if(tradability.eligible !== true){
+    return {status: 'avoid', label: '期权不可做', best,
+      risk: tradability.block_reasons?.[0] || '合约未通过资格门槛'};
+  }
   if(tradability.counter_trend){
     return {status: 'avoid', label: '期权逆趋势', best, risk: '合约方向与标的趋势相反'};
   }
