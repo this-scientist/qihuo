@@ -4,13 +4,13 @@ import {renderChart} from './charts.mjs';
 import {enableTableSorting} from './sortable.mjs';
 const GLOSSARY={
  '期权 / 标的':'期权合约代码与其对应的真实期货月份合约（主力/次主力）。副标题显示该期货标的的趋势方向与阶段。',
- '可做性':'0–100原始综合分：标的发动机55 + Gamma/Delta 15 + IV 10 + 流动性5 + 到期时间15。只有方向、阶段、结构、成交量>2000、持仓量>1000及情景盈亏比全部通过，才给正式可做性分。',
+ '可做性':'0–100综合分，判断这张期权"快速上涨"的潜力：标的发动机55（期货趋势/突破/ADX/RPS/增仓）+Gamma与IV结构30+到期时间15。≥80优、≥65良、≥50可关注。',
  '爆发力标签':'评分依据的白话标签：Gamma甜区=平值附近Gamma最大；末日轮=≤7天高Gamma高风险；IV便宜/透支=期权相对实际波动的贵贱；逆趋势=期权方向与期货趋势相反；深虚值=|Delta|<0.10易归零。',
  '剩余天数':'距期权到期的自然日（含当天）。7–15天Gamma强且行情来得及；≤2天极易归零。',
  '参考IV':'由期权权利金用Black-76反推的隐含波动率（年化%），≈为美式期权欧式近似。',
  '同组平均IV':'同一标的、同一到期日、同一方向全部行权价的IV平均，用来判断这张期权比同组贵还是便宜。',
- '成交量（手）':'当日成交手数；严格大于2000手才通过资格门槛。',
- '持仓量（手）':'未平仓合约手数；严格大于1000手才通过资格门槛。',
+ '成交量（手）':'当日成交手数；与持仓量取小值用于流动性评分，≥2000手为充足。',
+ '持仓量（手）':'未平仓合约手数，代表市场深度；太小则买卖难以成交。',
 };
 const tips=mountTips(GLOSSARY);
 const $=id=>document.getElementById(id);let data,chain,filtered=[],toolbar,detailRequest=0,filterRequest=0,autoOpenCode=null;
@@ -43,18 +43,11 @@ function renderTradability(option){
  if(tb.counter_trend){
   const warn=document.createElement('div');
   warn.style.cssText='color:#b42318;font-weight:700;margin-bottom:6px';
-  warn.textContent=`⚠ 逆趋势：标的当前为${DIR_TEXT[tb.trend_direction]??''}趋势，这是${option.call_put==='C'?'看涨':'看跌'}期权，已被资格门槛拦截。`;
+  warn.textContent=`⚠ 逆趋势：标的当前为${DIR_TEXT[tb.trend_direction]??''}趋势，这是${option.call_put==='C'?'看涨':'看跌'}期权。发动机分已半折、总分封顶55；抄底/摸顶须自担趋势延续风险，不作为顺势候选。`;
   panel.appendChild(warn);
  }
  const b=tb.breakdown||{};
- const scenario=tb.scenario||{};
- const targetPrices=scenario.target_prices||{},stopPrices=scenario.stop_prices||{};
- const rows=[['资格',tb.eligible?'通过':`不可做：${(tb.block_reasons||[]).join('；')||'未通过门槛'}`],
-  ['可做性',tb.score==null?`—（原始分 ${tb.raw_score??'—'}）`:`${tb.score}（${tb.grade}）`],
-  ['信号 / 保守盈亏比',scenario.status==='ok'?`${tb.signal_level||scenario.signal_level||'—'} · ${fmt(scenario.conservative_rr)}:1`:'无法评估'],
-  ['标的目标 / 止损',scenario.status==='ok'?`${fmt(scenario.target_underlying)} / ${fmt(scenario.stop_underlying)}（${scenario.trading_days}个交易日）`:'—'],
-  ['期权目标价 0.9/1.0/1.1×IV',scenario.status==='ok'?`${fmt(targetPrices.conservative)} / ${fmt(targetPrices.base)} / ${fmt(targetPrices.optimistic)}`:'—'],
-  ['期权止损价 0.9/1.0/1.1×IV',scenario.status==='ok'?`${fmt(stopPrices.conservative)} / ${fmt(stopPrices.base)} / ${fmt(stopPrices.optimistic)}`:'—'],
+ const rows=[['可做性',tb.score==null?'—':`${tb.score}（${tb.grade}）`],
   ['标的',tb.underlying_name?`${tb.underlying_name} · ${DIR_TEXT[tb.trend_direction]??'—'} · ${tb.phase??'—'}（期权综合分${fmt(tb.explosion)}）`:'—'],
   ['标的发动机',`${b.underlying??'—'}/${b.underlying_max??55}`],
   ['Gamma/Delta',`${b.gamma??'—'}/10 + ${b.delta??'—'}/5`],
@@ -96,7 +89,7 @@ async function apply(){
     (tb&&tb.underlying_name?` · 标的：${tb.underlying_name} ${DIR_TEXT[tb.trend_direction]??''}·${tb.phase??''}`:'');
    under.className='contract';under.textContent=underText;first.append(name,under);row.appendChild(first);
    const scoreCell=document.createElement('td');
-   if(tb&&tb.score!=null){const s=document.createElement('strong');s.textContent=String(tb.score);const g=document.createElement('span');g.className='contract';g.textContent=`${tb.grade} · ${tb.signal_level||'—'} · RR ${fmt(tb.scenario?.conservative_rr)}`;scoreCell.append(s,document.createTextNode(' '),g);scoreCell.dataset.sort=String(tb.score)}else{scoreCell.textContent=tb?.raw_score==null?'—':`不可做（原始分 ${tb.raw_score}）`}
+   if(tb&&tb.score!=null){const s=document.createElement('strong');s.textContent=String(tb.score);const g=document.createElement('span');g.className='contract';g.textContent=tb.grade;scoreCell.append(s,document.createTextNode(' '),g);scoreCell.dataset.sort=String(tb.score)}else{scoreCell.textContent='—'}
    row.appendChild(scoreCell);
    const tagCell=document.createElement('td');tagCell.className='small muted';tagCell.textContent=tb?(tb.tags||[]).join(' · ')||'—':'—';row.appendChild(tagCell);
    for(const value of [option.days_to_expiry,option.iv_reference==null?'—':fmt(option.iv_reference)+'%'+(option.model_approximation?' ≈':''),option.average_iv==null?'—':`${fmt(option.average_iv)}%（${option.iv_sample_count}个）`,option.vol,option.oi]){const td=document.createElement('td');td.textContent=value;row.appendChild(td)}
@@ -133,7 +126,7 @@ async function init(){
   $('option-code').onchange=()=>{$('option-detail').hidden=true;$('option-underlying-chart').replaceChildren();apply()};
   $('refresh-options').onclick=async()=>{try{await api('/api/options/refresh',{asof:data.asof});toolbar.watch()}catch(error){$('option-error').textContent=error.message}};
   $('close-option-detail').onclick=()=>{++detailRequest;$('option-detail').hidden=true};
-  $('export-options').onclick=()=>{const fields=['ts_code','underlying_code','call_put','exercise_price','maturity_date','days_to_expiry','premium','premium_per_lot','vol','oi','iv_reference','average_iv','iv_sample_count','hv20','moneyness_pct','status'];const extra=row=>{const tb=row.tradability||{},s=tb.scenario||{};return [tb.eligible??'',tb.score??'',tb.raw_score??'',tb.grade??'',tb.signal_level??'',s.conservative_rr??'',s.target_underlying??'',s.stop_underlying??'',s.target_prices?.conservative??'',s.target_prices?.base??'',s.target_prices?.optimistic??'',(tb.block_reasons||[]).join(' '),(tb.tags||[]).join(' '),tb.phase??'']};const header=[...fields,'eligible','tradability_score','raw_score','tradability_grade','signal_level','conservative_rr','target_underlying','stop_underlying','target_option_iv90','target_option_iv100','target_option_iv110','block_reasons','tradability_tags','underlying_phase'];download(`期权观察-${data.asof}.csv`,'\ufeff'+[header.join(','),...filtered.map(row=>[...fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`),...extra(row).map(v=>`"${String(v).replaceAll('"','""')}"`)].join(','))].join('\r\n'),'text/csv;charset=utf-8')};
+  $('export-options').onclick=()=>{const fields=['ts_code','underlying_code','call_put','exercise_price','maturity_date','days_to_expiry','premium','premium_per_lot','vol','oi','iv_reference','average_iv','iv_sample_count','hv20','moneyness_pct','status'];const extra=row=>[row.tradability?.score??'',row.tradability?.grade??'',(row.tradability?.tags||[]).join(' '),row.tradability?.phase??''];const header=[...fields,'tradability_score','tradability_grade','tradability_tags','underlying_phase'];download(`期权观察-${data.asof}.csv`,'\ufeff'+[header.join(','),...filtered.map(row=>[...fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`),...extra(row).map(v=>`"${String(v).replaceAll('"','""')}"`)].join(','))].join('\r\n'),'text/csv;charset=utf-8')};
  }catch(error){$('option-error').textContent=error.message}
 }
 init();

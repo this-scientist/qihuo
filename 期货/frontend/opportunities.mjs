@@ -17,7 +17,7 @@ const currentFilters=()=>({
 });
 
 function visibleContracts(group,f){
-  return group.contracts.filter(c=>c.eligible===true&&c.score>=f.minScore
+  return group.contracts.filter(c=>c.score>=f.minScore
     &&(f.side==='all'||c.call_put===f.side)
     &&(!f.alignedOnly||!c.counter_trend)
     &&Number.isFinite(c.days_to_expiry)
@@ -68,10 +68,6 @@ function contractRow(group,c,f){
   const prem=c.iv_premium_pct;
   cell(signedPct(prem),prem==null?'':(prem<=0?'up':'down'));
   cell(`${c.vol??'—'} / ${c.oi??'—'}`);
-  cell(c.signal_level||'—',c.signal_level==='强烈信号'?'up':'');
-  cell(c.scenario?.conservative_rr==null?'—':`${fmt(c.scenario.conservative_rr,2)} : 1`);
-  cell(c.scenario?.target_underlying==null?'—':`${fmt(c.scenario.target_underlying)} / ${fmt(c.scenario.stop_underlying)}`);
-  cell(c.scenario?.target_prices?.conservative==null?'—':fmt(c.scenario.target_prices.conservative));
   const score=document.createElement('td');
   const strong=document.createElement('strong');strong.className=gradeClass(c.grade);
   strong.textContent=String(c.score);
@@ -126,7 +122,7 @@ function groupCard(group,rows,f){
   card.appendChild(head);
   const wrap=document.createElement('div');wrap.className='table-wrap';
   const table=document.createElement('table');
-  table.innerHTML='<thead><tr><th>期权合约</th><th>方向</th><th>行权价</th><th>虚值%</th><th>剩余天</th><th>Delta</th><th>权利金/手</th><th>参考IV</th><th>IV较HV20</th><th>量 / 仓</th><th>信号</th><th>保守盈亏比</th><th>标的目标 / 止损</th><th>期权目标(0.9×IV)</th><th>可做性</th><th>爆发力标签</th></tr></thead>';
+  table.innerHTML='<thead><tr><th>期权合约</th><th>方向</th><th>行权价</th><th>虚值%</th><th>剩余天</th><th>Delta</th><th>权利金/手</th><th>参考IV</th><th>IV较HV20</th><th>量 / 仓</th><th>可做性</th><th>爆发力标签</th></tr></thead>';
   const body=document.createElement('tbody');
   rows.slice(0,expanded.has(group.main_code)?undefined:TOP_N).forEach(c=>body.appendChild(contractRow(group,c,f)));
   table.appendChild(body);wrap.appendChild(table);card.appendChild(wrap);
@@ -152,8 +148,8 @@ function render(){
   if(products===0){
     empty.hidden=false;
     empty.textContent=report.groups.length
-      ?'当前筛选条件下没有可做期权：可降低可做性阈值或切换到期区间/方向。'
-      :'该日期没有通过方向、阶段、结构、量仓与盈亏比门槛的期权合约。';
+      ?'当前筛选条件下没有可做期权：可降低可做性阈值、切换到期区间/方向，或取消“仅顺势”。'
+      :'该日期没有任何可做性≥50的期权合约。';
   }else empty.hidden=true;
 }
 
@@ -198,8 +194,8 @@ async function refreshChain(){
 
 function updateAlignedHint(){
   const hint=$('aligned-hint');
-  hint.textContent=!$('aligned-only').checked
-    ?'逆趋势合约已在后端资格门槛拦截，不会进入机会总览。':'';
+  hint.textContent=(!$('aligned-only').checked&&Number($('min-score').value)>55)
+    ?'逆趋势合约评分硬封顶55，需同时把阈值切到「≥50 可关注」':'';
 }
 
 async function init(){

@@ -27,7 +27,6 @@ const option = overrides => ({
   call_put: 'C',
   days_to_expiry: 30,
   tradability: {
-    eligible: true,
     score: 76,
     grade: '良',
     depth: 1200,
@@ -51,19 +50,6 @@ assert.equal(optionExpressionStatus(base(), [option({days_to_expiry: 2})]).statu
 assert.equal(
   optionExpressionStatus(base(), [option({tradability: {...option().tradability, depth: 120}})]).status,
   'watch',
-);
-const blocked = option({ts_code: 'JM2609-C-98.DCE', tradability: {
-  ...option().tradability,
-  eligible: false,
-  score: null,
-  raw_score: 92,
-  block_reasons: ['成交量不足'],
-}});
-assert.equal(optionExpressionStatus(base(), [blocked]).status, 'avoid');
-assert.equal(optionExpressionStatus(base(), [blocked]).risk, '成交量不足');
-assert.equal(
-  optionExpressionStatus(base(), [blocked, option()]).best.ts_code,
-  option().ts_code,
 );
 
 const rows = buildOpportunityRows(

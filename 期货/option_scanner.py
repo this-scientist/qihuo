@@ -6,14 +6,8 @@
 """
 import math
 
-from option_scenario import option_scenario
-
 WEIGHTS = dict(rps_strength=15, rps_accel=10, adx_accel=10, breakout=10, oi=10,
     volume=5, inventory=10, term=10, iv=10, liquidity=10)
-MIN_OPTION_VOLUME = 2000
-MIN_OPTION_OI = 1000
-ELIGIBLE_STATES = {'START', 'PREPARE', 'TREND'}
-SIGNAL_RANK = {'强烈信号': 0, '可做': 1, '观察': 2, '不可做': 3}
 MAIN_DELTA = (0.20, 0.55)
 LOTTO_DELTA = (0.08, 0.20)
 PREFERRED_DTE = (20, 60)
@@ -52,7 +46,7 @@ NOTES = [
     '过度延伸观察单独列出阶段判定为"过度延伸"的品种（双向，按爆发指数排名）；主榜单仍以启动/持续候选为主，延伸品种在主榜"趋势·阶段"列同样标注。',
     '反转雷达为品种级观察（与方向扫描互补）：强势衰退=五日前RPS20≥90且五日下滑≥15（跌破70升级）；衰退排列=RPS20<RPS60<RPS120且RPS120≥80；扩散翻多/翻空=三周期RPS同步升降且形成对应阶梯；价涨仓减按趋势背景定性——下跌趋势中=回补反弹（空头平仓推动，勿当反转追多），多头趋势中=减仓上行（新资金未接力的资金背离警示，不是看空信号），无趋势背景才泛称疑似空头回补。基差与库存未接入，期限确认仅用期货Carry。',
     '期权全部为日线收盘参考值，无买卖盘口与价差；合约挑选不构成可执行买入清单。',
-    '合约档位：先要求成交量>2000且持仓量>1000，再选主仓|Delta| 0.20–0.55、彩票仓|Delta| 0.08–0.20；期限优先20–60自然日，池内无合约时依次放宽到10–60、7–120天并在档位标注；不足7天的近月直接排除。',
+    '合约档位：主仓|Delta| 0.20–0.55、彩票仓|Delta| 0.08–0.20；期限优先20–60自然日，池内无合约时依次放宽到10–60、7–120天并在档位标注；不足7天的近月直接排除。',
     '10倍潜力模型=品种发动机80分（趋势启动25/RPS15/ADX10/OI+成交10/基本面10/IV状态10，缺失归一）＋合约层20分（Gamma-Delta10/DTE5/流动性5）。合约只选|Delta|0.10–0.40、DTE7–30的轻中度虚值：|Delta|0.15–0.30与DTE7–15为甜区（兼具便宜与Gamma爆发力，标的无需极端行情即可穿越执行价）。IV相对HV20溢价>30%判为"已透支"（方向对也可能被Vega反吃）；总分≥80为高潜力、60–80中、<60低。核心逻辑：大方向×行情够快×买得早×Gamma够大×IV未提前透支。',
 ]
 
@@ -63,22 +57,6 @@ def _finite(*values):
 
 def _item(score, cap, ok=True):
     return dict(score=round(float(score), 2), max=cap, status='ok' if ok else 'missing')
-
-
-def iv_assessment(iv, hv20):
-    if not (_finite(iv, hv20) and hv20 > 0):
-        return dict(score=None, premium_pct=None, tag=None, not_hot=None)
-    premium_pct = round((iv - hv20) / hv20 * 100, 1)
-    if premium_pct <= 0:
-        score, tag = 10.0, 'IV便宜'
-    elif premium_pct <= 15:
-        score, tag = 8.0, None
-    elif premium_pct <= 30:
-        score, tag = 5.0, None
-    else:
-        score, tag = 0.0, 'IV透支'
-    return dict(score=score, premium_pct=premium_pct, tag=tag,
-        not_hot=premium_pct <= 30)
 
 
 def _pick(option, tier, note):
@@ -108,14 +86,14 @@ def _best(pool_records, target_delta):
 
 
 def pick_contracts(chain, direction):
-    """挑选方向、期限、Delta与严格量仓门槛均合格的参考合约。"""
+    """主仓 |Delta| 0.20–0.55 + 彩票仓 |Delta| 0.08–0.20；期限优先20–60自然日，依次放宽10–60、7–120；要求量仓与参考IV有效。"""
     side = 'C' if direction == 'long' else 'P'
     candidates = []
     for row in chain:
         dte, vol, oi, delta, iv = row.get('days_to_expiry'), row.get('vol'), row.get('oi'), row.get('delta'), row.get('iv_reference')
         if row.get('call_put') != side or not _finite(dte, vol, oi, delta, iv):
             continue
-        if not 7 <= dte <= 120 or vol <= MIN_OPTION_VOLUME or oi <= MIN_OPTION_OI:
+        if not 7 <= dte <= 120 or vol <= 0 or oi <= 0:
             continue
         row['_abs_delta'] = abs(delta)
         candidates.append(row)
@@ -145,7 +123,7 @@ def _tb_iv_label(premium_pct):
 
 
 def _tb_pool(chain, direction):
-    """10倍候选池：方向、Delta、DTE与严格量仓门槛全部合格。"""
+    """10倍候选池：方向正确、轻中度虚值(|Delta|0.10–0.40)、DTE7–30、量仓为正。"""
     side = 'C' if direction == 'long' else 'P'
     pool = []
     for row in chain:
@@ -153,8 +131,7 @@ def _tb_pool(chain, direction):
             continue
         dte, vol, oi, delta, iv, gamma = (row.get(k) for k in
             ['days_to_expiry', 'vol', 'oi', 'delta', 'iv_reference', 'gamma'])
-        if (not _finite(dte, vol, oi, delta, iv, gamma)
-                or vol <= MIN_OPTION_VOLUME or oi <= MIN_OPTION_OI):
+        if not _finite(dte, vol, oi, delta, iv, gamma) or vol <= 0 or oi <= 0:
             continue
         ad = abs(delta)
         if TB_DELTA_BAND[0] <= ad <= TB_DELTA_BAND[1] and TB_DTE_BAND[0] <= dte <= TB_DTE_BAND[1]:
@@ -268,9 +245,8 @@ def _signals(record, direction, metrics, reference):
         'inventory': bool(d * spot > 0 and d * basis5 > 0) if _finite(spot, basis5) else None,
         'term': (bool(d * carry > 0 and d * carry5 >= 0) if _finite(carry5) else bool(d * carry > 0))
             if _finite(carry) else (d * sp > 0 if _finite(sp) else None),
-        'iv_not_hot': iv_assessment(iv, hv20)['not_hot'],
-        'liquidity_ok': (reference['vol'] > MIN_OPTION_VOLUME and reference['oi'] > MIN_OPTION_OI)
-            if reference is not None else None,
+        'iv_not_hot': bool(iv <= hv20 * 1.3 and iv <= 60) if _finite(iv, hv20) else None,
+        'liquidity_ok': liquidity >= 1000 if _finite(liquidity) else None,
     }
 
 
@@ -333,9 +309,8 @@ def scan_one(record, direction, chain):
         items['term'] = _item(0, 10, False)
     iv = reference.get('iv_reference') if reference is not None else None
     hv20 = reference.get('hv20') if reference is not None else None
-    iv_state = iv_assessment(iv, hv20)
-    if iv_state['score'] is not None:
-        items['iv'] = _item(iv_state['score'], 10)
+    if _finite(iv, hv20):
+        items['iv'] = _item(max(0.0, min(1.0, (5 - (iv - hv20)) / 10)) * 10, 10)
     else:
         items['iv'] = _item(0, 10, False)
     liquidity = min(reference['vol'], reference['oi']) if reference is not None else None
@@ -587,24 +562,16 @@ def annotate_options(payload, option_payload):
     chain_by_main = {}
     for row in rows:
         chain_by_main.setdefault(row.get('main_code'), []).append(row)
-    records_by_side = {(r.get('ts_code'), r.get('direction')): r
-                       for r in payload.get('records', [])
-                       if r.get('direction') in ('long', 'short')}
-    decisions_by_code = {}
-    for record in payload.get('records', []):
-        decisions_by_code.setdefault(record.get('ts_code'), record)
+    records_by_code = {r.get('ts_code'): r for r in payload.get('records', [])}
     for main_code, chain in chain_by_main.items():
-        decision = decisions_by_code.get(main_code)
+        underlying = records_by_code.get(main_code)
         scans = {}
-        for direction in ('long', 'short'):
-            underlying = records_by_side.get((main_code, direction))
-            if underlying is None:
-                scans[direction] = None
-                continue
-            try:
-                scans[direction] = scan_one(underlying, direction, chain)
-            except Exception:
-                scans[direction] = None
+        if underlying is not None:
+            for direction in ('long', 'short'):
+                try:
+                    scans[direction] = scan_one(underlying, direction, chain)
+                except Exception:
+                    scans[direction] = None
         # 同组（同到期同方向）Gamma×F 最大值，用于 Gamma 相对归一。
         gamma_max = {}
         for row in chain:
@@ -614,44 +581,36 @@ def annotate_options(payload, option_payload):
                 gamma_max[key] = max(gamma_max.get(key, 0.0), g * f)
         for row in chain:
             try:
-                direction = 'long' if row.get('call_put') == 'C' else 'short'
-                underlying = records_by_side.get((main_code, direction))
-                row['tradability'] = option_tradability(
-                    row, scans, gamma_max, underlying=underlying, decision=decision)
+                row['tradability'] = option_tradability(row, scans, gamma_max)
             except Exception:
                 row['tradability'] = None
     return option_payload
 
 
-def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
-    """单张期权机会分；资格闸门失败时保留 raw_score，但 score 为空。"""
+def option_tradability(row, scans, gamma_max):
+    """单张期权的快速上涨潜力评分（0–100）。
+    标的发动机55（爆发指数归一+共振/突破标签）＋期权爆发结构30（Gamma甜区15/IV未透支10/流动性5）
+    ＋时间成本15（DTE适配，末日轮高Gamma但行情必须快；Theta日损耗>8%权利金扣分）。"""
     direction = 'long' if row.get('call_put') == 'C' else 'short'
     scan = scans.get(direction)
-    context = underlying or decision or {}
     dte, adelta = row.get('days_to_expiry'), row.get('delta')
     gamma, fprice = row.get('gamma'), row.get('underlying_close')
     iv, hv20, vol, oi, prem, theta = (row.get(k) for k in
         ['iv_reference', 'hv20', 'vol', 'oi', 'premium', 'theta'])
-    tags, block_reasons = [], []
-    greeks_ok = _finite(dte, adelta, gamma, fprice) and fprice > 0
-    if not greeks_ok:
-        block_reasons.append('Greeks缺失')
-    ad = abs(adelta) if _finite(adelta) else 0.0
-    # —— A 标的发动机 55：只用商品项，IV与期权流动性不重复计入 ——
+    tags = []
+    if not (_finite(dte, adelta, gamma, fprice, vol, oi) and fprice > 0):
+        return dict(score=None, grade='缺数据', tags=['Greeks缺失'], direction=direction,
+            underlying_name=None, trend_direction=None, phase=None, explosion=None,
+            breakdown=None, depth=None, iv_premium_pct=None, aligned=None, counter_trend=None)
+    ad = abs(adelta)
+    # —— A 标的发动机 55 ——
     a_avail = 55
     if scan is None:
         a_earn = 0.0
         tags.append('无标的评分')
-        engine_coverage = 0.0
-        explosion = None
+        trend_dir, phase, explosion = None, None, None
     else:
-        engine_keys = ('rps_strength', 'rps_accel', 'adx_accel', 'breakout',
-                       'oi', 'volume', 'inventory', 'term')
-        engine_items = [scan['items'][key] for key in engine_keys]
-        engine_earned = sum(item['score'] for item in engine_items if item['status'] == 'ok')
-        engine_available = sum(item['max'] for item in engine_items if item['status'] == 'ok')
-        a_earn = round(min(55.0, engine_earned / 80 * 55), 2)
-        engine_coverage = round(engine_available / 80 * 100, 1)
+        a_earn = round(min(55.0, (scan.get('explosion_score') or 0) * 0.65), 2)
         sig = scan.get('signals', {})
         if scan.get('resonance'):
             tags.append('四重共振')
@@ -659,32 +618,20 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
                            ('rps_rise', 'RPS加速'), ('oi_up', '增仓')]:
             if sig.get(key) is True:
                 tags.append(label)
+        trend_dir = scan.get('trend_direction')
+        phase = scan.get('phase')
         explosion = scan.get('explosion_score')
-    trend_dir = context.get('decision_side') or context.get('trend_direction')
-    phase = context.get('phase') or (scan.get('phase') if scan else None)
+    # 方向闸门：标的已有明确趋势而期权方向相反时，发动机证据只承认一半
+    # （增仓/放量/期限/IV等无方向分项可能给错误方向凑分），且总分硬封顶55，
+    # 逆趋势期权永远不进"良/优"——抄底摸顶必须人工显式打开。
     counter_trend = trend_dir in ('long', 'short') and trend_dir != direction
     aligned = None if trend_dir is None else (not counter_trend if trend_dir != 'neutral' else None)
     if counter_trend:
+        a_earn = round(a_earn * 0.5, 2)
         tags.append('逆趋势')
-        block_reasons.append('逆趋势')
-    elif trend_dir not in ('long', 'short'):
-        block_reasons.append('商品方向不明确')
-    state = context.get('state_v2')
-    if state == 'EXHAUST':
-        block_reasons.append('趋势衰竭')
-    elif state not in ELIGIBLE_STATES:
-        block_reasons.append('商品阶段不允许')
-    if context.get('structure_confirm') == 'CONFLICT':
-        block_reasons.append('商品结构冲突')
-    if scan is None:
-        block_reasons.append('方向评分缺失')
-    if not _finite(vol) or vol <= MIN_OPTION_VOLUME:
-        block_reasons.append('成交量不足')
-    if not _finite(oi) or oi <= MIN_OPTION_OI:
-        block_reasons.append('持仓量不足')
     # —— B1 Gamma 甜区 15（同组相对Gamma 10 + Delta位置 5）——
     gmax = gamma_max.get((row.get('maturity_date'), row.get('call_put')), 0.0)
-    gnorm = (gamma * fprice / gmax) if greeks_ok and gmax > 0 else 0.0
+    gnorm = (gamma * fprice / gmax) if gmax > 0 else 0.0
     gamma_pts = round(10 * min(1.0, gnorm), 2)
     if 0.25 <= ad <= 0.50:
         delta_pts = 5
@@ -699,21 +646,30 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
     if 0.20 <= ad <= 0.60 and gnorm >= 0.66:
         tags.append('Gamma甜区')
     # —— B2 IV 未透支 10 ——
-    iv_state = iv_assessment(iv, hv20)
-    iv_earn = iv_state['score'] if iv_state['score'] is not None else 0.0
-    iv_avail = 10 if iv_state['score'] is not None else 0
-    premium_pct = iv_state['premium_pct']
-    if iv_state['tag']:
-        tags.append(iv_state['tag'])
+    iv_earn, iv_avail, premium_pct = 0.0, 0, None
+    if _finite(iv) and iv > 0:
+        iv_avail = 10
+        if _finite(hv20) and hv20 > 0:
+            premium_pct = round((iv - hv20) / hv20 * 100, 1)
+            if premium_pct <= 0:
+                iv_earn, tag = 10.0, 'IV便宜'
+            elif premium_pct <= 15:
+                iv_earn, tag = 8.0, None
+            elif premium_pct <= 30:
+                iv_earn, tag = 5.0, None
+            else:
+                iv_earn, tag = 0.0, 'IV透支'
+            if tag:
+                tags.append(tag)
+        else:
+            iv_earn = 5.0
     # —— B3 流动性 5 ——
-    depth = int(min(vol, oi)) if _finite(vol, oi) else None
-    liq_pts = (5 if depth >= 2000 else 4 if depth >= 1000 else 2 if depth >= 300 else 1) if depth is not None else 0
-    if depth is None or depth < 300:
+    depth = int(min(vol, oi))
+    liq_pts = 5 if depth >= 2000 else (4 if depth >= 1000 else (2 if depth >= 300 else 1))
+    if depth < 300:
         tags.append('流动性偏薄')
     # —— C 时间/成本 15 ——
-    if not _finite(dte):
-        dte_pts = 0
-    elif dte <= 2:
+    if dte <= 2:
         dte_pts = 6
         tags.append('末日轮')
         tags.append('最后两天')
@@ -733,38 +689,23 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
         theta_drag = abs(theta) / prem * 100
         if theta_drag > 8:
             tags.append('Theta损耗重')
-            if _finite(dte) and dte > 7:
+            if dte > 7:
                 dte_pts = max(0, dte_pts - 3)
     earned = a_earn + gamma_pts + delta_pts + iv_earn + liq_pts + dte_pts
-    raw_score = round(earned, 1)
-    raw_grade = '优' if raw_score >= 80 else ('良' if raw_score >= 65 else ('可关注' if raw_score >= 50 else '弱'))
-    scenario = option_scenario(context, row, direction) if context else dict(status='blocked', reason='商品数据缺失')
-    if scenario.get('status') != 'ok':
-        block_reasons.append(scenario.get('reason') or '情景评估失败')
-    elif scenario.get('signal_level') == '不可做':
-        block_reasons.append('盈亏比不足')
-    if state == 'PREPARE':
-        tags.append('酝酿候选')
-    if scenario.get('signal_level') == '强烈信号':
-        tags.append({'START': '启动强烈信号', 'PREPARE': '酝酿高盈亏比',
-                     'TREND': '趋势高盈亏比'}.get(state, '强烈信号'))
-    block_reasons = list(dict.fromkeys(block_reasons))
-    eligible = not block_reasons
-    score = raw_score if eligible else None
-    grade = raw_grade if eligible else ('缺数据' if not greeks_ok else '不可做')
-    return dict(score=score, raw_score=raw_score, grade=grade, raw_grade=raw_grade,
-        eligible=eligible, block_reasons=block_reasons, signal_level=scenario.get('signal_level'),
-        scenario=scenario, tags=list(dict.fromkeys(tags)), direction=direction, aligned=aligned,
+    available = a_avail + 10 + 5 + iv_avail + 5 + 15
+    score = round(earned / available * 100, 1)
+    if counter_trend:
+        score = round(min(score, 55.0), 1)  # 硬封顶：逆趋势最高"可关注"，不进良/优
+    grade = '优' if score >= 80 else ('良' if score >= 65 else ('可关注' if score >= 50 else '弱'))
+    return dict(score=score, grade=grade, tags=tags, direction=direction, aligned=aligned,
         counter_trend=counter_trend,
-        underlying_name=context.get('name') or (scan.get('name') if scan else None), trend_direction=trend_dir,
+        underlying_name=(scan.get('name') if scan else None), trend_direction=trend_dir,
         phase=phase, explosion=explosion,
         breakdown=dict(underlying=round(a_earn, 1), underlying_max=a_avail,
-            underlying_coverage=engine_coverage,
             gamma=gamma_pts, delta=delta_pts,
             iv=iv_earn if iv_avail else None, iv_max=iv_avail,
             liquidity=liq_pts, dte=dte_pts),
-        depth=depth, iv_premium_pct=premium_pct,
-        volume_threshold=MIN_OPTION_VOLUME, oi_threshold=MIN_OPTION_OI)
+        depth=depth, iv_premium_pct=premium_pct)
 
 
 def build_scanner(payload, options, top=5):
@@ -836,10 +777,10 @@ def build_scanner(payload, options, top=5):
     return result
 
 
-# 期权机会总览：服务端只下发通过全部硬门槛、并达到评分下限的合约。
+# 期权机会总览：服务端只下发可关注（>=50）以上合约，前端再按阈值/方向/到期即时过滤。
 OPPORTUNITY_FLOOR = 50.0
-OPPORTUNITY_NOTE = ('期权机会总览只列出成交量>2000、持仓量>1000，且通过方向、阶段、结构和情景盈亏比门槛的合约；'
-    '组内优先展示强烈信号（保守盈亏比≥3），再按保守盈亏比和可做性评分排序。'
+OPPORTUNITY_NOTE = ('期权机会总览把全市场可做性≥50（可关注）以上的期权按品种一次分组列出，组内按可做性分降序；'
+    '页面默认再收紧到≥65（良）且仅顺势、到期7–120天。逆趋势合约发动机半折且硬封顶55，默认隐藏，需手动打开。'
     '所有数值为日线收盘参考值，无买卖盘口，不构成可执行买入清单。')
 _OPPORTUNITY_FIELDS = ['ts_code', 'underlying_code', 'call_put', 'exercise_price', 'maturity_date',
     'days_to_expiry', 'delta', 'premium', 'premium_per_lot', 'iv_reference', 'vol', 'oi', 'role',
@@ -849,10 +790,7 @@ _OPPORTUNITY_FIELDS = ['ts_code', 'underlying_code', 'call_put', 'exercise_price
 def _opportunity_contract(row):
     tb = row.get('tradability') or {}
     out = {key: row.get(key) for key in _OPPORTUNITY_FIELDS}
-    out.update(score=tb.get('score'), raw_score=tb.get('raw_score'), grade=tb.get('grade'),
-        eligible=tb.get('eligible') is True, block_reasons=tb.get('block_reasons') or [],
-        signal_level=tb.get('signal_level'), scenario=tb.get('scenario'),
-        tags=tb.get('tags') or [],
+    out.update(score=tb.get('score'), grade=tb.get('grade'), tags=tb.get('tags') or [],
         counter_trend=bool(tb.get('counter_trend')), aligned=tb.get('aligned'),
         depth=tb.get('depth'), iv_premium_pct=tb.get('iv_premium_pct'), explosion=tb.get('explosion'))
     return out
@@ -861,8 +799,8 @@ def _opportunity_contract(row):
 def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
     """全市场可做期权按品种聚合（期权机会总览页数据源）。
 
-    只保留通过全部硬门槛且可做性评分 >=floor 的合约并裁剪到展示字段；分组元数据
-    （名称/大类/趋势阶段/决策状态）取自期货记录。
+    只保留带可做性评分且 >=floor 的合约并裁剪到展示字段；分组元数据（名称/大类/趋势阶段/
+    决策状态）取自期货记录。逆趋势合约保留（封顶55），由前端默认隐藏、可显式打开。
     """
     meta = {}
     for record in payload.get('records', []):
@@ -873,7 +811,7 @@ def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
     for row in option_payload.get('records', []):
         tb = row.get('tradability') or {}
         score = tb.get('score')
-        if tb.get('eligible') is not True or not _finite(score) or score < floor:
+        if not _finite(score) or score < floor:
             continue
         code = row.get('main_code')
         group = groups.get(code)
@@ -886,10 +824,7 @@ def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
         group['contracts'].append(_opportunity_contract(row))
     result = []
     for group in groups.values():
-        contracts = sorted(group['contracts'], key=lambda c: (
-            SIGNAL_RANK.get(c.get('signal_level'), 9),
-            -((c.get('scenario') or {}).get('conservative_rr') or 0),
-            -c['score'], -(c['depth'] or 0), c['ts_code']))
+        contracts = sorted(group['contracts'], key=lambda c: (-c['score'], -(c['depth'] or 0), c['ts_code']))
         group['contracts'] = contracts
         group['best_score'] = contracts[0]['score']
         group['count'] = len(contracts)
@@ -897,10 +832,7 @@ def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
         group['put_count'] = group['count'] - group['call_count']
         group['counter_count'] = sum(1 for c in contracts if c['counter_trend'])
         result.append(group)
-    result.sort(key=lambda g: (
-        SIGNAL_RANK.get(g['contracts'][0].get('signal_level'), 9),
-        -((g['contracts'][0].get('scenario') or {}).get('conservative_rr') or 0),
-        -g['best_score'], g['main_code'] or ''))
+    result.sort(key=lambda g: (-g['best_score'], g['main_code'] or ''))
     return dict(asof=payload.get('asof') or option_payload.get('asof'),
         status=option_payload.get('status'), floor=floor, note=OPPORTUNITY_NOTE, groups=result,
         coverage=option_payload.get('coverage', []), failures=option_payload.get('failures', []),

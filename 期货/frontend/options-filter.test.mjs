@@ -18,10 +18,9 @@ test('0–10 includes endpoints; mean remains independent of liquidity filters',
 });
 test('minScore filters by tradability; trade sort desc with liquidity tiebreak',()=>{
  const rows=withAverageIV([
-  row({days_to_expiry:5,vol:3000,oi:5000,tradability:{score:82,eligible:true}}),
-  row({days_to_expiry:5,vol:100,oi:500,tradability:{score:66,eligible:true}}),
-  row({days_to_expiry:5,vol:2000,oi:2000,tradability:{score:40,eligible:true}}),
-  row({days_to_expiry:5,vol:5000,oi:5000,tradability:{score:99,eligible:false}}),
+  row({days_to_expiry:5,vol:3000,oi:5000,tradability:{score:82}}),
+  row({days_to_expiry:5,vol:100,oi:500,tradability:{score:66}}),
+  row({days_to_expiry:5,vol:2000,oi:2000,tradability:{score:40}}),
   row({days_to_expiry:5,vol:900,oi:900,tradability:{score:null}}),
  ]);
  const settings={minDays:0,maxDays:10,minVol:0,minOi:0,maxDistance:100,side:'all',role:'all',sort:'trade'};
@@ -35,14 +34,6 @@ test('minScore filters by tradability; trade sort desc with liquidity tiebreak',
  ]);
  assert.deepEqual(selectOptions(tied,settings).map(r=>r.vol),[800,100,50]);
 });
-test('score filter never admits an ineligible contract even with a high raw score',()=>{
- const settings={minDays:0,maxDays:60,minVol:0,minOi:0,maxDistance:100,side:'all',role:'all',sort:'trade',minScore:0};
- const rows=withAverageIV([
-  row({tradability:{score:70,eligible:true}}),
-  row({tradability:{score:99,raw_score:99,eligible:false,block_reasons:['成交量不足']}}),
- ]);
- assert.deepEqual(selectOptions(rows,settings).map(r=>r.tradability.score),[70]);
-});
 test('aligned mode hides counter-trend rows; neutral and missing stay',()=>{
  const rows=withAverageIV([
   row({tradability:{score:70,counter_trend:true}}),     // 逆趋势：默认隐藏
@@ -54,6 +45,6 @@ test('aligned mode hides counter-trend rows; neutral and missing stay',()=>{
  assert.equal(selectOptions(rows,{...base,align:'aligned'}).length,3);
  assert.equal(selectOptions(rows,{...base,align:'all'}).length,4);
  // 与最低分叠加：逆趋势即使分数≥65也被隐藏。
- const rich=withAverageIV([row({tradability:{score:74,eligible:false,counter_trend:true}}),row({tradability:{score:70,eligible:true,counter_trend:false}})]);
+ const rich=withAverageIV([row({tradability:{score:74,counter_trend:true}}),row({tradability:{score:70,counter_trend:false}})]);
  assert.deepEqual(selectOptions(rich,{...base,align:'aligned',minScore:65}).map(r=>r.tradability.score),[70]);
 });
