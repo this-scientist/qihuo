@@ -5,6 +5,7 @@ from option_analysis import black76
 
 
 STAGE_HORIZONS = {'START': 5, 'PREPARE': 10, 'TREND': 10}
+DEFAULT_STAGE_HORIZON = 10
 IV_FACTORS = {'conservative': .90, 'base': 1.0, 'optimistic': 1.10}
 
 
@@ -16,7 +17,7 @@ def _finite(value):
 
 
 def stage_horizon(state):
-    return STAGE_HORIZONS.get(state)
+    return STAGE_HORIZONS.get(state, DEFAULT_STAGE_HORIZON)
 
 
 def classify_rr(value):
@@ -67,8 +68,6 @@ def scenario_levels(record, option, direction):
 def option_scenario(record, option, direction):
     state = record.get('state_v2')
     trading_days = stage_horizon(state)
-    if trading_days is None:
-        return dict(status='blocked', reason='商品阶段不支持情景评估')
     dte = option.get('days_to_expiry')
     calendar_days = math.ceil(trading_days * 7 / 5)
     if not _finite(dte) or float(dte) <= calendar_days:

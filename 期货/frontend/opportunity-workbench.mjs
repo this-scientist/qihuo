@@ -26,6 +26,7 @@ export function optionExpressionStatus(record, optionRows = []){
   if(!candidates.length)return {status: 'missing', label: '无匹配期权链', best: null, risk: '该方向暂无可评估期权'};
 
   const ranked = [...candidates].sort((a, b) =>
+    Number(b.tradability?.recommendable === true) - Number(a.tradability?.recommendable === true) ||
     Number(b.tradability?.eligible === true) - Number(a.tradability?.eligible === true) ||
     ((b.tradability?.scenario?.conservative_rr ?? -1) - (a.tradability?.scenario?.conservative_rr ?? -1)) ||
     (b.tradability?.score ?? -1) - (a.tradability?.score ?? -1) ||
@@ -38,11 +39,12 @@ export function optionExpressionStatus(record, optionRows = []){
   const depth = tradability.depth ?? Math.min(best.vol ?? 0, best.oi ?? 0);
   const dte = best.days_to_expiry;
   if(tradability.eligible !== true){
-    return {status: 'avoid', label: '期权不可做', best,
-      risk: tradability.block_reasons?.[0] || '合约未通过资格门槛'};
+    return {status: 'avoid', label: '期权量仓不合格', best,
+      risk: tradability.block_reasons?.[0] || '单张期权量仓未通过'};
   }
-  if(tradability.counter_trend){
-    return {status: 'avoid', label: '期权逆趋势', best, risk: '合约方向与标的趋势相反'};
+  if(tradability.recommendable !== true){
+    return {status: 'avoid', label: '期权不推荐', best,
+      risk: tradability.recommendation_reasons?.[0] || '未通过系统推荐条件'};
   }
   if(finite(dte) && dte <= 2){
     return {status: 'avoid', label: '末日轮高风险', best, risk: '剩余时间过短，不进正常机会'};

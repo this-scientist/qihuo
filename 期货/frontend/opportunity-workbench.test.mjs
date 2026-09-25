@@ -28,10 +28,14 @@ const option = overrides => ({
   days_to_expiry: 30,
   tradability: {
     eligible: true,
+    recommendable: true,
     score: 76,
     grade: '良',
     depth: 1200,
     counter_trend: false,
+    block_reasons: [],
+    recommendation_reasons: [],
+    warnings: [],
     tags: ['Gamma甜区'],
   },
   ...overrides,
@@ -41,7 +45,7 @@ assert.equal(optionExpressionStatus(base(), [option()]).status, 'usable');
 assert.equal(optionExpressionStatus(base(), []).status, 'missing');
 assert.equal(
   optionExpressionStatus(base(), [option({tradability: {...option().tradability, counter_trend: true}})]).status,
-  'avoid',
+  'usable',
 );
 assert.equal(
   optionExpressionStatus(base(), [option({tradability: {...option().tradability, tags: ['IV透支']}})]).status,
@@ -55,6 +59,7 @@ assert.equal(
 const blocked = option({ts_code: 'JM2609-C-98.DCE', tradability: {
   ...option().tradability,
   eligible: false,
+  recommendable: false,
   score: null,
   raw_score: 92,
   block_reasons: ['成交量不足'],
@@ -65,6 +70,18 @@ assert.equal(
   optionExpressionStatus(base(), [blocked, option()]).best.ts_code,
   option().ts_code,
 );
+
+const lowRR = option({ts_code: 'JM2609-C-102.DCE', tradability: {
+  ...option().tradability,
+  eligible: true,
+  recommendable: false,
+  recommendation_reasons: ['盈亏比为1.19，不合格'],
+  scenario: {status: 'ok', conservative_rr: 1.19},
+}});
+assert.equal(optionExpressionStatus(base(), [lowRR]).status, 'avoid');
+assert.equal(optionExpressionStatus(base(), [lowRR]).label, '期权不推荐');
+assert.equal(optionExpressionStatus(base(), [lowRR]).risk, '盈亏比为1.19，不合格');
+assert.equal(optionExpressionStatus(base(), [lowRR, option()]).best.ts_code, option().ts_code);
 
 const rows = buildOpportunityRows(
   {

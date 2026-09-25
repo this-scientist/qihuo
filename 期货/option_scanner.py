@@ -13,7 +13,7 @@ WEIGHTS = dict(rps_strength=15, rps_accel=10, adx_accel=10, breakout=10, oi=10,
 MIN_OPTION_VOLUME = 2000
 MIN_OPTION_OI = 1000
 MIN_RECOMMENDABLE_SCORE = 50.0
-ELIGIBLE_STATES = {'START', 'PREPARE', 'TREND'}
+SCENARIO_STATES = {'START', 'PREPARE', 'TREND'}
 SIGNAL_RANK = {'强烈信号': 0, '可做': 1, '观察': 2, '不可做': 3}
 MAIN_DELTA = (0.20, 0.55)
 LOTTO_DELTA = (0.08, 0.20)
@@ -65,7 +65,7 @@ def _finite(*values):
 def _format_rr(value):
     if not _finite(value):
         return '—'
-    return f'{float(value):.2f}'.rstrip('0').rstrip('.')
+    return f'{float(value):.3f}'.rstrip('0').rstrip('.')
 
 
 def _item(score, cap, ok=True):
@@ -691,8 +691,8 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
     state = context.get('state_v2')
     if state == 'EXHAUST':
         warnings.append('趋势衰竭')
-    elif state not in ELIGIBLE_STATES:
-        warnings.append('商品阶段不允许')
+    elif state not in SCENARIO_STATES:
+        warnings.append(f'商品阶段为{state or "未知"}')
     if context.get('structure_confirm') == 'CONFLICT':
         warnings.append('商品结构冲突')
     if scan is None:

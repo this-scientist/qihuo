@@ -83,7 +83,8 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(stage_horizon('START'), 5)
         self.assertEqual(stage_horizon('PREPARE'), 10)
         self.assertEqual(stage_horizon('TREND'), 10)
-        self.assertIsNone(stage_horizon('WAIT'))
+        self.assertEqual(stage_horizon('WAIT'), 10)
+        self.assertEqual(stage_horizon('EXHAUST'), 10)
         self.assertEqual(classify_rr(3.0), '强烈信号')
         self.assertEqual(classify_rr(2.0), '可做')
         self.assertEqual(classify_rr(1.2), '观察')
@@ -519,7 +520,7 @@ class TradabilityTests(unittest.TestCase):
 
     def test_state_direction_and_structure_are_warnings_not_eligibility_gates(self):
         variants = [
-            (dict(state_v2='WAIT'), '商品阶段不允许'),
+            (dict(state_v2='WAIT'), '商品阶段为WAIT'),
             (dict(state_v2='EXHAUST'), '趋势衰竭'),
             (dict(structure_confirm='CONFLICT'), '商品结构冲突'),
             (dict(decision_side='short', trend_direction='short'), '逆趋势'),
@@ -552,6 +553,16 @@ class TradabilityTests(unittest.TestCase):
             self.assertEqual(tb['scenario']['status'], 'ok')
             if state == 'PREPARE':
                 self.assertIn('酝酿候选', tb['tags'])
+
+    def test_wait_and_exhaust_use_default_scenario_horizon(self):
+        for state in ['WAIT', 'EXHAUST']:
+            record = strong_record('long')
+            record['state_v2'] = state
+            row = option_row(100, 'C', dte=45)
+            tb = self._annotated([row], record)[row['ts_code']]
+            self.assertTrue(tb['eligible'])
+            self.assertEqual(tb['scenario']['status'], 'ok')
+            self.assertEqual(tb['scenario']['trading_days'], 10)
 
     def test_directional_rows_are_not_overwritten_by_input_order(self):
         long = strong_record('long')

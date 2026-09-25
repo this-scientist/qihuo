@@ -17,7 +17,7 @@ const currentFilters=()=>({
 });
 
 function visibleContracts(group,f){
-  return group.contracts.filter(c=>c.eligible===true&&c.score>=f.minScore
+  return group.contracts.filter(c=>c.recommendable===true&&c.score>=f.minScore
     &&(f.side==='all'||c.call_put===f.side)
     &&(!f.alignedOnly||!c.counter_trend)
     &&Number.isFinite(c.days_to_expiry)
@@ -153,7 +153,7 @@ function render(){
     empty.hidden=false;
     empty.textContent=report.groups.length
       ?'当前筛选条件下没有可做期权：可降低可做性阈值或切换到期区间/方向。'
-      :'该日期没有通过方向、阶段、结构、量仓与盈亏比门槛的期权合约。';
+      :'该日期没有量仓合格、情景盈亏比合格且综合分达标的期权合约。';
   }else empty.hidden=true;
 }
 
@@ -199,7 +199,7 @@ async function refreshChain(){
 function updateAlignedHint(){
   const hint=$('aligned-hint');
   hint.textContent=!$('aligned-only').checked
-    ?'逆趋势合约已在后端资格门槛拦截，不会进入机会总览。':'';
+    ?'逆趋势只作为风险提示；取消勾选后可查看满足量仓和情景条件的逆趋势合约。':'';
 }
 
 async function init(){
