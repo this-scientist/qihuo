@@ -33,8 +33,8 @@ def greeks(future,strike,time,rate,volatility,side):
     delta=discount*cdf(d1) if side=='C' else -discount*cdf(-d1)
     gamma=discount*pdf/(future*sigma)
     vega=discount*future*pdf*math.sqrt(time)/100
-    theta=(discount*(-future*pdf*volatility/(2*math.sqrt(time))-rate*future*cdf(d1)) if side=='C'
-        else discount*(-future*pdf*volatility/(2*math.sqrt(time))+rate*strike*cdf(-d2)))/365
+    price=black76(future,strike,time,rate,volatility,side)
+    theta=(-discount*future*pdf*volatility/(2*math.sqrt(time))+rate*price)/365
     return dict(delta=delta,gamma=gamma,vega=vega,theta=theta)
 
 
