@@ -250,16 +250,22 @@ class ScannerTests(unittest.TestCase):
         self.assertIn('weights', report)
         self.assertTrue(report['notes'])
 
-    def test_symbols_without_option_chain_sink_below_tradeable(self):
-        strong = strong_record('long')  # 高分但不给期权链
+    def test_option_availability_does_not_change_underlying_ranking(self):
+        strong = strong_record('long')  # 高分商品，不给期权链
         weak = weak_record('long')
         weak.update(ts_code='B.DCE', name='豆二', main_code='B2609.DCE')
-        chain = [dict(row, main_code='B.DCE') for row in self.chain]
         payload = dict(asof='20260911', records=[strong, weak])
-        report = build_scanner(payload, dict(records=chain), top=5)
-        self.assertEqual([r['ts_code'] for r in report['long']], ['B.DCE', 'JM.DCE'])
-        self.assertFalse(report['long'][1]['option_ready'])
-        self.assertTrue(report['long'][0]['option_ready'])
+        qualified = [dict(row, main_code='B.DCE') for row in self.chain]
+        thin = [dict(row, main_code='B.DCE', vol=2000, oi=1000) for row in self.chain]
+        reports = [build_scanner(payload, dict(records=chain), top=5)
+                   for chain in ([], thin, qualified)]
+        orders = [[r['ts_code'] for r in report['long']] for report in reports]
+        self.assertEqual(orders, [['JM.DCE', 'B.DCE']] * 3)
+        self.assertTrue(all(report['long'][0]['underlying_score'] >
+            report['long'][1]['underlying_score'] for report in reports))
+        # option_ready仍可展示，但不得参与商品排序。
+        self.assertFalse(reports[0]['long'][1]['option_ready'])
+        self.assertTrue(reports[2]['long'][1]['option_ready'])
 
     def test_overextended_candidates_get_dedicated_list(self):
         over_long = strong_record('long'); over_long.update(phase='过度延伸', phase_match=True, phase_age=12)

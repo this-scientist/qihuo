@@ -346,6 +346,15 @@ def scan_one(record, direction, chain):
     earned = sum(i['score'] for i in items.values() if i['status'] == 'ok')
     available = sum(i['max'] for i in items.values() if i['status'] == 'ok')
     explosion = round(earned / available * 100, 2) if available > 0 else None
+    # 商品排序只使用商品自身因子；IV、期权量仓和期权链是否存在仅属于合约层。
+    underlying_keys = ('rps_strength', 'rps_accel', 'adx_accel', 'breakout',
+                       'oi', 'volume', 'inventory', 'term')
+    underlying_earned = sum(items[key]['score'] for key in underlying_keys
+                            if items[key]['status'] == 'ok')
+    underlying_available = sum(items[key]['max'] for key in underlying_keys
+                               if items[key]['status'] == 'ok')
+    underlying_score = (round(underlying_earned / underlying_available * 100, 2)
+                        if underlying_available > 0 else None)
     metrics = dict(rps20=rps20, rps_accel=(raw - prev) if d == 1 and _finite(raw, prev) else ((prev - raw) if _finite(raw, prev) else None),
         adx=adx, adx_slope=slope, return5=record.get('return5'), oi_change5=o5, oi_change20=o20,
         volume_ratio=vr, spread_change5=sp, extension_atr=record.get('extension_atr'),
@@ -367,9 +376,12 @@ def scan_one(record, direction, chain):
         phase_match=record.get('phase_match'), phase_age=record.get('phase_age'),
         phase_reason=record.get('phase_reason'), phase_extension_atr=record.get('phase_extension_atr'),
         trend_score=record.get('trend_score'), startup_score=record.get('startup_score'), startup_hits=record.get('startup_hits'),
-        explosion_score=explosion, items=items, signals=signals,
+        explosion_score=explosion, underlying_score=underlying_score,
+        underlying_coverage=round(underlying_available / 80 * 100, 1),
+        items=items, signals=signals,
         signals_met=sum(1 for v in signals.values() if v is True),
         signals_applicable=sum(1 for v in signals.values() if v is not None),
+        underlying_signals_met=sum(1 for key in SIGNAL_KEYS[:-2] if signals[key] is True),
         resonance=resonance, resonance_parts=[key for key, value in parts.items() if value],
         metrics=metrics, contracts=picks, option_ready=reference is not None,
         structure=structure,
@@ -782,10 +794,9 @@ def build_scanner(payload, options, top=5):
             if 'decision_side' in record and record['decision_side'] != direction:
                 continue
             scanned = scan_one(record, direction, chains.get(record.get('ts_code'), []))
-            if scanned['explosion_score'] is not None:
+            if scanned['underlying_score'] is not None:
                 rows.append(scanned)
-        # 期权扫描以“可操作”为前提：没有任何可评估期权合约的品种沉到有合约品种之后。
-        rows.sort(key=lambda r: (-int(r['option_ready']), -r['explosion_score'], -r['signals_met'], r['ts_code']))
+        rows.sort(key=lambda r: (-r['underlying_score'], -r['underlying_signals_met'], r['ts_code']))
         return rows[:max(1, int(top))]
 
     for direction in ['long', 'short']:
@@ -799,11 +810,11 @@ def build_scanner(payload, options, top=5):
         if direction not in ['long', 'short']:
             continue
         scanned = scan_one(record, direction, chains.get(record.get('ts_code'), []))
-        if scanned['explosion_score'] is None:
+        if scanned['underlying_score'] is None:
             continue
         scanned['direction'] = direction
         extended.append(scanned)
-    extended.sort(key=lambda r: (-int(r['option_ready']), -r['explosion_score'], -r['signals_met'], r['ts_code']))
+    extended.sort(key=lambda r: (-r['underlying_score'], -r['underlying_signals_met'], r['ts_code']))
     result['extended'] = extended
     # 反转雷达：品种级去重（两个方向行的原始字段相同），与方向扫描互补、不改变原榜单。
     seen, radar = set(), []
