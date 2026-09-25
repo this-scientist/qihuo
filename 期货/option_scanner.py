@@ -12,6 +12,7 @@ WEIGHTS = dict(rps_strength=15, rps_accel=10, adx_accel=10, breakout=10, oi=10,
     volume=5, inventory=10, term=10, iv=10, liquidity=10)
 MIN_OPTION_VOLUME = 2000
 MIN_OPTION_OI = 1000
+MIN_RECOMMENDABLE_SCORE = 50.0
 ELIGIBLE_STATES = {'START', 'PREPARE', 'TREND'}
 SIGNAL_RANK = {'强烈信号': 0, '可做': 1, '观察': 2, '不可做': 3}
 MAIN_DELTA = (0.20, 0.55)
@@ -59,6 +60,12 @@ NOTES = [
 
 def _finite(*values):
     return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values)
+
+
+def _format_rr(value):
+    if not _finite(value):
+        return '—'
+    return f'{float(value):.2f}'.rstrip('0').rstrip('.')
 
 
 def _item(score, cap, ok=True):
@@ -636,7 +643,7 @@ def annotate_options(payload, option_payload):
 
 
 def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
-    """单张期权机会分；资格闸门失败时保留 raw_score，但 score 为空。"""
+    """单张期权机会分；量仓资格与推荐结论分别表达。"""
     direction = 'long' if row.get('call_put') == 'C' else 'short'
     scan = scans.get(direction)
     context = underlying or decision or {}
@@ -644,10 +651,10 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
     gamma, fprice = row.get('gamma'), row.get('underlying_close')
     iv, hv20, vol, oi, prem, theta = (row.get(k) for k in
         ['iv_reference', 'hv20', 'vol', 'oi', 'premium', 'theta'])
-    tags, block_reasons = [], []
+    tags, block_reasons, warnings, recommendation_reasons = [], [], [], []
     greeks_ok = _finite(dte, adelta, gamma, fprice) and fprice > 0
     if not greeks_ok:
-        block_reasons.append('Greeks缺失')
+        warnings.append('Greeks缺失')
     ad = abs(adelta) if _finite(adelta) else 0.0
     # —— A 标的发动机 55：只用商品项，IV与期权流动性不重复计入 ——
     a_avail = 55
@@ -678,18 +685,18 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
     aligned = None if trend_dir is None else (not counter_trend if trend_dir != 'neutral' else None)
     if counter_trend:
         tags.append('逆趋势')
-        block_reasons.append('逆趋势')
+        warnings.append('逆趋势')
     elif trend_dir not in ('long', 'short'):
-        block_reasons.append('商品方向不明确')
+        warnings.append('商品方向不明确')
     state = context.get('state_v2')
     if state == 'EXHAUST':
-        block_reasons.append('趋势衰竭')
+        warnings.append('趋势衰竭')
     elif state not in ELIGIBLE_STATES:
-        block_reasons.append('商品阶段不允许')
+        warnings.append('商品阶段不允许')
     if context.get('structure_confirm') == 'CONFLICT':
-        block_reasons.append('商品结构冲突')
+        warnings.append('商品结构冲突')
     if scan is None:
-        block_reasons.append('方向评分缺失')
+        warnings.append('方向评分缺失')
     if not _finite(vol) or vol <= MIN_OPTION_VOLUME:
         block_reasons.append('成交量不足')
     if not _finite(oi) or oi <= MIN_OPTION_OI:
@@ -752,20 +759,28 @@ def option_tradability(row, scans, gamma_max, underlying=None, decision=None):
     raw_grade = '优' if raw_score >= 80 else ('良' if raw_score >= 65 else ('可关注' if raw_score >= 50 else '弱'))
     scenario = option_scenario(context, row, direction) if context else dict(status='blocked', reason='商品数据缺失')
     if scenario.get('status') != 'ok':
-        block_reasons.append(scenario.get('reason') or '情景评估失败')
+        recommendation_reasons.append(scenario.get('reason') or '情景评估失败')
     elif scenario.get('signal_level') == '不可做':
-        block_reasons.append('盈亏比不足')
+        recommendation_reasons.append(
+            f"盈亏比为{_format_rr(scenario.get('conservative_rr'))}，不合格")
     if state == 'PREPARE':
         tags.append('酝酿候选')
     if scenario.get('signal_level') == '强烈信号':
         tags.append({'START': '启动强烈信号', 'PREPARE': '酝酿高盈亏比',
                      'TREND': '趋势高盈亏比'}.get(state, '强烈信号'))
     block_reasons = list(dict.fromkeys(block_reasons))
+    warnings = list(dict.fromkeys(warnings))
     eligible = not block_reasons
     score = raw_score if eligible else None
-    grade = raw_grade if eligible else ('缺数据' if not greeks_ok else '不可做')
+    grade = raw_grade if eligible else '不可做'
+    if eligible and raw_score < MIN_RECOMMENDABLE_SCORE:
+        recommendation_reasons.append(f'综合分低于{MIN_RECOMMENDABLE_SCORE:g}')
+    recommendation_reasons = list(dict.fromkeys(recommendation_reasons))
+    recommendable = eligible and not recommendation_reasons
     return dict(score=score, raw_score=raw_score, grade=grade, raw_grade=raw_grade,
-        eligible=eligible, block_reasons=block_reasons, signal_level=scenario.get('signal_level'),
+        eligible=eligible, block_reasons=block_reasons, warnings=warnings,
+        recommendable=recommendable, recommendation_reasons=recommendation_reasons,
+        signal_level=scenario.get('signal_level'),
         scenario=scenario, tags=list(dict.fromkeys(tags)), direction=direction, aligned=aligned,
         counter_trend=counter_trend,
         underlying_name=context.get('name') or (scan.get('name') if scan else None), trend_direction=trend_dir,
@@ -847,10 +862,11 @@ def build_scanner(payload, options, top=5):
     return result
 
 
-# 期权机会总览：服务端只下发通过全部硬门槛、并达到评分下限的合约。
-OPPORTUNITY_FLOOR = 50.0
-OPPORTUNITY_NOTE = ('期权机会总览只列出成交量>2000、持仓量>1000，且通过方向、阶段、结构和情景盈亏比门槛的合约；'
+# 期权机会总览：服务端只下发量仓合格、情景RR合格且达到评分下限的合约。
+OPPORTUNITY_FLOOR = MIN_RECOMMENDABLE_SCORE
+OPPORTUNITY_NOTE = ('期权机会总览只列出单张成交量>2000、持仓量>1000，且情景可计算、保守盈亏比≥1.2的合约；'
     '组内优先展示强烈信号（保守盈亏比≥3），再按保守盈亏比和可做性评分排序。'
+    '逆趋势、商品阶段和商品结构只作风险提示，不参与量仓资格判断。'
     '所有数值为日线收盘参考值，无买卖盘口，不构成可执行买入清单。')
 _OPPORTUNITY_FIELDS = ['ts_code', 'underlying_code', 'call_put', 'exercise_price', 'maturity_date',
     'days_to_expiry', 'delta', 'premium', 'premium_per_lot', 'iv_reference', 'vol', 'oi', 'role',
@@ -862,6 +878,9 @@ def _opportunity_contract(row):
     out = {key: row.get(key) for key in _OPPORTUNITY_FIELDS}
     out.update(score=tb.get('score'), raw_score=tb.get('raw_score'), grade=tb.get('grade'),
         eligible=tb.get('eligible') is True, block_reasons=tb.get('block_reasons') or [],
+        recommendable=tb.get('recommendable') is True,
+        recommendation_reasons=tb.get('recommendation_reasons') or [],
+        warnings=tb.get('warnings') or [],
         signal_level=tb.get('signal_level'), scenario=tb.get('scenario'),
         tags=tb.get('tags') or [],
         counter_trend=bool(tb.get('counter_trend')), aligned=tb.get('aligned'),
@@ -872,7 +891,7 @@ def _opportunity_contract(row):
 def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
     """全市场可做期权按品种聚合（期权机会总览页数据源）。
 
-    只保留通过全部硬门槛且可做性评分 >=floor 的合约并裁剪到展示字段；分组元数据
+    只保留量仓合格、情景可推荐且可做性评分 >=floor 的合约并裁剪到展示字段；分组元数据
     （名称/大类/趋势阶段/决策状态）取自期货记录。
     """
     meta = {}
@@ -884,7 +903,7 @@ def build_opportunities(payload, option_payload, floor=OPPORTUNITY_FLOOR):
     for row in option_payload.get('records', []):
         tb = row.get('tradability') or {}
         score = tb.get('score')
-        if tb.get('eligible') is not True or not _finite(score) or score < floor:
+        if tb.get('recommendable') is not True or not _finite(score) or score < floor:
             continue
         code = row.get('main_code')
         group = groups.get(code)

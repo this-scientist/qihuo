@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from option_analysis import black76, greeks, option_metrics
 from option_scenario import classify_rr, option_scenario, stage_horizon
@@ -398,15 +399,16 @@ class TradabilityTests(unittest.TestCase):
         # 顺势 Call：方向对齐，可进良/优。
         self.assertTrue(call['aligned'])
         self.assertFalse(call['counter_trend'])
-        # 逆趋势 Put：保留原始结构分供诊断，但正式评分被硬门槛拦截。
+        # 逆趋势 Put：保留评分并提示风险，不改变单张期权的量仓资格。
         self.assertIn('逆趋势', put['tags'])
         self.assertFalse(put['aligned'])
         self.assertTrue(put['counter_trend'])
-        self.assertFalse(put['eligible'])
-        self.assertIsNone(put['score'])
+        self.assertTrue(put['eligible'])
+        self.assertIsNotNone(put['score'])
         self.assertIsNotNone(put['raw_score'])
-        self.assertIn('逆趋势', put['block_reasons'])
-        self.assertGreater(call['score'], put['raw_score'])
+        self.assertNotIn('逆趋势', put['block_reasons'])
+        self.assertIn('逆趋势', put['warnings'])
+        self.assertGreater(call['score'], put['score'])
 
     def test_neutral_trend_not_counter_aligned_none(self):
         record = strong_record('long')
@@ -457,22 +459,26 @@ class TradabilityTests(unittest.TestCase):
         self.assertIn('Theta损耗重', bleed_tb['tags'])
         self.assertEqual(bleed_tb['breakdown']['dte'], 12)
 
-    def test_missing_greeks_returns_none_score(self):
+    def test_missing_greeks_warns_without_failing_liquidity_qualification(self):
         broken = option_row(100, 'C', dte=5)
         broken['gamma'] = None
         scores = self._annotated([broken], strong_record('long'))
         tb = scores[broken['ts_code']]
-        self.assertIsNone(tb['score'])
-        self.assertEqual(tb['grade'], '缺数据')
+        self.assertTrue(tb['eligible'])
+        self.assertIsNotNone(tb['score'])
+        self.assertIn('Greeks缺失', tb['warnings'])
+        self.assertNotIn('Greeks缺失', tb['block_reasons'])
 
     def test_missing_underlying_record_does_not_crash(self):
         row = option_row(100, 'C', dte=5)
         scores = self._annotated([row], None)
         tb = scores[row['ts_code']]
         self.assertIn('无标的评分', tb['tags'])
-        self.assertIsNone(tb['score'])
+        self.assertIsNotNone(tb['score'])
         self.assertIsNotNone(tb['raw_score'])  # 仍给出期权结构分，标的项归零
-        self.assertFalse(tb['eligible'])
+        self.assertTrue(tb['eligible'])
+        self.assertFalse(tb['recommendable'])
+        self.assertIn('方向评分缺失', tb['warnings'])
         self.assertEqual(tb['breakdown']['underlying'], 0)
 
     def test_score_sorts_high_to_low_in_realistic_chain(self):
@@ -511,7 +517,7 @@ class TradabilityTests(unittest.TestCase):
             self.assertFalse(tb['eligible'])
             self.assertIsNone(tb['score'])
 
-    def test_state_direction_and_structure_are_hard_gates(self):
+    def test_state_direction_and_structure_are_warnings_not_eligibility_gates(self):
         variants = [
             (dict(state_v2='WAIT'), '商品阶段不允许'),
             (dict(state_v2='EXHAUST'), '趋势衰竭'),
@@ -523,8 +529,19 @@ class TradabilityTests(unittest.TestCase):
             record.update(changes)
             row = option_row(100, 'C', dte=30)
             tb = self._annotated([row], record)[row['ts_code']]
-            self.assertFalse(tb['eligible'])
-            self.assertIn(reason, tb['block_reasons'])
+            self.assertTrue(tb['eligible'])
+            self.assertNotIn(reason, tb['block_reasons'])
+            self.assertIn(reason, tb['warnings'])
+
+    @patch('option_scanner.option_scenario', return_value={
+        'status': 'ok', 'signal_level': '不可做', 'conservative_rr': 1.19})
+    def test_low_rr_is_recommendation_failure_not_eligibility_failure(self, _scenario):
+        row = option_row(100, 'C', dte=30)
+        tb = self._annotated([row], strong_record('long'))[row['ts_code']]
+        self.assertTrue(tb['eligible'])
+        self.assertFalse(tb['recommendable'])
+        self.assertEqual(tb['recommendation_reasons'], ['盈亏比为1.19，不合格'])
+        self.assertEqual(tb['block_reasons'], [])
 
     def test_start_prepare_and_trend_reach_scenario_evaluation(self):
         for state in ['START', 'PREPARE', 'TREND']:
@@ -701,14 +718,16 @@ class OpportunityTests(unittest.TestCase):
         self.assertEqual(self._report(chain, records, floor=99.0)['groups'], [])
         report = self._report(chain, records, floor=0.0)
         self.assertEqual(report['groups'][0]['count'], 1)
-        # 缺 Greeks 的合约评分为 None，任何 floor 下都不进组。
+        # 缺 Greeks 只是风险提示；若量仓、情景和综合分满足，仍可进入候选。
         broken = option_row(100, 'C', dte=30)
         broken['gamma'] = None
-        self.assertEqual(self._report([broken], records, floor=0.0)['groups'], [])
+        broken_report = self._report([broken], records, floor=0.0)
+        self.assertEqual(broken_report['groups'][0]['count'], 1)
+        self.assertIn('Greeks缺失', broken_report['groups'][0]['contracts'][0]['warnings'])
 
     def test_ineligible_contract_is_excluded_even_with_high_raw_score(self):
         row = option_row(100, 'C', dte=30)
-        row['tradability'] = dict(eligible=False, score=99.0, grade='优',
+        row['tradability'] = dict(eligible=False, recommendable=False, score=99.0, grade='优',
             block_reasons=['成交量不足'], signal_level='强烈信号',
             scenario={'conservative_rr': 5.0})
         report = build_opportunities({'asof': '20260918', 'records': [strong_record('long')]},
@@ -718,15 +737,24 @@ class OpportunityTests(unittest.TestCase):
     def test_opportunities_sort_signal_then_rr_before_raw_score(self):
         observe = option_row(98, 'C', dte=30)
         strong = option_row(102, 'C', dte=30)
-        observe['tradability'] = dict(eligible=True, score=95.0, grade='优', tags=[],
+        observe['tradability'] = dict(eligible=True, recommendable=True, score=95.0, grade='优', tags=[],
             signal_level='观察', scenario={'conservative_rr': 1.5})
-        strong['tradability'] = dict(eligible=True, score=70.0, grade='良', tags=[],
+        strong['tradability'] = dict(eligible=True, recommendable=True, score=70.0, grade='良', tags=[],
             signal_level='强烈信号', scenario={'conservative_rr': 3.4})
         report = build_opportunities({'asof': '20260918', 'records': [strong_record('long')]},
             {'records': [observe, strong], 'status': '已采集'}, floor=0)
         contracts = report['groups'][0]['contracts']
         self.assertEqual(contracts[0]['ts_code'], strong['ts_code'])
         self.assertEqual(contracts[0]['signal_level'], '强烈信号')
+
+    def test_eligible_but_not_recommendable_contract_is_excluded(self):
+        row = option_row(100, 'C', dte=30)
+        row['tradability'] = dict(eligible=True, recommendable=False, score=88.0,
+            grade='优', block_reasons=[], recommendation_reasons=['盈亏比为1.19，不合格'],
+            signal_level='不可做', scenario={'status': 'ok', 'conservative_rr': 1.19})
+        report = build_opportunities({'asof': '20260918', 'records': [strong_record('long')]},
+            {'records': [row], 'status': '已采集'}, floor=0)
+        self.assertEqual(report['groups'], [])
 
     def test_uncollected_status_passthrough(self):
         option_payload = {'records': [], 'status': '尚未采集该日期期权数据'}
