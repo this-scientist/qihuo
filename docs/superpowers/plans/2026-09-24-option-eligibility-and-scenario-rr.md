@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enforce strict option volume/open-interest eligibility, align option candidates with commodity states, and rank START/PREPARE/TREND contracts using Black-76 target/stop scenarios and conservative risk/reward.
+**Goal:** Add strict option-contract recommendation rules and Black-76 target/stop scenarios without using option availability or eligibility to filter, rank, or regroup commodity underlyings.
 
-**Architecture:** Add a focused `option_scenario.py` module for level conversion, Black-76 repricing, and risk/reward classification. Keep orchestration in `option_scanner.py`, but index commodity inputs by `(ts_code, direction)`, share one IV assessment, and make eligibility a source-of-truth field consumed by every API and frontend. Preserve the existing raw opportunity score for diagnostics while hard failures return `score=None` and never enter opportunity lists.
+**Architecture:** Add a focused `option_scenario.py` module for level conversion, Black-76 repricing, and risk/reward classification. Keep commodity ranking and workbench queue assignment independent of option data. After a commodity is displayed, `option_scanner.py` evaluates concrete contracts using directional indexing, shared IV assessment, liquidity thresholds and scenarios; hard failures return `score=None` and never enter option recommendation lists, while the underlying commodity remains unchanged.
 
 **Tech Stack:** Python 3/unittest, Black-76 analytics, JavaScript ES modules/Node test runner, existing static frontend.
 
@@ -14,12 +14,12 @@
 
 - Create `期货/option_scenario.py`: pure scenario-level selection, repricing, RR, and signal classification.
 - Modify `期货/option_analysis.py`: correct Black-76 theta.
-- Modify `期货/option_scanner.py`: shared IV assessment, directional indexing, hard eligibility, scenario integration, candidate filtering/sorting.
+- Modify `期货/option_scanner.py`: shared IV assessment, directional indexing, contract-only eligibility, scenario integration, candidate filtering/sorting, option-independent commodity ranking.
 - Modify `期货/tests/test_options.py`: theta finite-difference regression.
 - Modify `期货/tests/test_option_scanner.py`: liquidity boundaries, state gates, row-order invariance, IV consistency, scenarios, RR boundaries, opportunity exclusion.
 - Modify `期货/frontend/options.mjs`: show eligibility reasons and scenario values.
 - Modify `期货/frontend/app.mjs`: only recommend eligible contracts and sort by signal/RR first.
-- Modify `期货/frontend/opportunity-workbench.mjs`: treat ineligible contracts as unavailable.
+- Modify `期货/frontend/opportunity-workbench.mjs`: report ineligible contracts without changing the commodity queue.
 - Modify `期货/frontend/options-filter.mjs`: exclude ineligible contracts when a score threshold is active.
 - Modify relevant frontend test modules for the new contract fields.
 
@@ -123,7 +123,7 @@ git add -- '期货/option_scenario.py' '期货/tests/test_option_scanner.py'
 git commit -m "feat: add option target and risk reward scenarios"
 ```
 
-### Task 3: Make eligibility and directional data authoritative
+### Task 3: Make contract eligibility and directional data authoritative
 
 **Files:**
 - Modify: `期货/tests/test_option_scanner.py`
@@ -142,6 +142,8 @@ oi_1001 -> passes the OI gate
 ```
 
 Also assert missing volume/OI, `WAIT`, `EXHAUST`, neutral direction, structural conflict, and counter-trend contracts return `score=None`, `grade='不可做'`. Assert START, PREPARE, and TREND reach scenario evaluation. Create opposite long/short `directional_rps20` inputs and verify reversing input row order leaves Call and Put explosion values unchanged.
+
+Add a separate regression asserting `build_scanner` returns the same commodity order when its option chain is missing, below the contract thresholds, or qualified. Option readiness may be displayed as metadata but must not participate in commodity sorting.
 
 - [ ] **Step 2: Write failing IV-consistency and opportunity tests**
 
@@ -198,7 +200,7 @@ git add -- '期货/option_scanner.py' '期货/tests/test_option_scanner.py'
 git commit -m "feat: enforce option eligibility gates"
 ```
 
-### Task 4: Unify frontend eligibility and scenario presentation
+### Task 4: Unify frontend contract eligibility without changing commodity queues
 
 **Files:**
 - Modify: `期货/frontend/options.mjs`
@@ -219,6 +221,10 @@ selectOptions([{...row, tradability:{eligible:false, score:null}}], settings).le
 // Workbench labels an ineligible best contract as avoid/watch with its block reason.
 optionExpressionStatus(record, [blocked]).label.includes('不可做')
 
+// The same START/TREND commodity stays in the same queue whether options are absent,
+// ineligible, or eligible.
+buildOpportunityRows(data, execution, options).focus.map(row => row.code)
+
 // Eligible strong RR wins over a merely high raw score in candidate selection/sorting helpers.
 ```
 
@@ -230,7 +236,7 @@ Expected: FAIL because current filters do not understand `eligible` or scenarios
 
 - [ ] **Step 3: Update filtering and workbench status**
 
-When a minimum score is selected, require `tradability.eligible===true`. In `optionExpressionStatus`, check `eligible===false` before score and return the first `block_reasons` entry. Preserve missing-chain behavior.
+When a minimum score is selected, require `tradability.eligible===true`. In `optionExpressionStatus`, check `eligible===false` before score and return the first `block_reasons` entry. Preserve missing-chain behavior. Remove `optionStatus.status==='avoid'` from `queueFor`: queue assignment is based only on commodity state, commodity structure/extension and execution quality.
 
 - [ ] **Step 4: Render scenario diagnostics**
 
@@ -266,7 +272,7 @@ git commit -m "feat: show option eligibility and scenario returns"
 
 - [ ] **Step 1: Update user-facing rules**
 
-Document strict `vol>2000`, `oi>1000`, stage horizons, three IV scenarios, RR levels, and the absence of executable bid/ask quotes. Replace the old “标的发动机55（综合分折算）” wording with “标的发动机55（仅RPS、ADX、突破、OI、量能和商品结构）”，and state that IV and liquidity are scored once at the contract layer.
+Document strict contract-level `vol>2000`, `oi>1000`, stage horizons, three IV scenarios, RR levels, and the absence of executable bid/ask quotes. Explicitly state that none of these option conditions participate in commodity filtering or queue assignment. Replace the old “标的发动机55（综合分折算）” wording with “标的发动机55（仅RPS、ADX、突破、OI、量能和商品结构）”，and state that IV and liquidity are scored once at the contract layer.
 
 - [ ] **Step 2: Run the complete relevant Python suite**
 
