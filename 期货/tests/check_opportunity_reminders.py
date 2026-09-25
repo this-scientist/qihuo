@@ -13,6 +13,18 @@ def main():
         reminders = page.locator('.opportunity-risk')
         assert reminders.count() > 0
         assert '等待后续商品信号确认' not in '\n'.join(reminders.all_inner_texts())
+        sections = page.locator('[data-opportunity-section]')
+        assert sections.count() == 4
+        for index in range(sections.count()):
+            section = sections.nth(index)
+            total = int(section.locator('.queue-count').inner_text())
+            assert section.locator('.opportunity-card').count() == total
+            assert section.evaluate('(node) => node.open') is True
+        focus = page.locator('[data-opportunity-section="focus"]')
+        focus.locator('summary').click()
+        assert focus.evaluate('(node) => node.open') is False
+        focus.locator('summary').click()
+        assert focus.evaluate('(node) => node.open') is True
         first = reminders.first
         visible = first.locator('.opportunity-risk-reasons p')
         assert 1 <= visible.count() <= 2

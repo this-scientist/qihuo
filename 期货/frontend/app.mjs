@@ -203,8 +203,7 @@ function opportunityCard(item){
 }
 function opportunitySection(key,items){
  const [title,note]=QUEUE_META[key];
- const shown=items.slice(0,key==='avoid'?8:6);
- return `<section class="opportunity-queue"><div class="section-heading"><div><h2>${title}<span class="queue-count">${items.length}</span></h2><div class="muted small">${note}</div></div></div><div class="opportunity-grid">${shown.length?shown.map(opportunityCard).join(''):`<div class="empty mini">暂无${title}标的</div>`}</div></section>`;
+ return `<details class="opportunity-queue" data-opportunity-section="${key}" open><summary class="section-heading opportunity-section-summary"><div><h2>${title}<span class="queue-count">${items.length}</span></h2><div class="muted small">${note}</div></div><span class="queue-toggle" aria-hidden="true"></span></summary><div class="opportunity-grid">${items.length?items.map(opportunityCard).join(''):`<div class="empty mini">暂无${title}标的</div>`}</div></details>`;
 }
 function renderOpportunityWorkbench(){
  const queues=buildOpportunityRows(data,state.execution||{});
