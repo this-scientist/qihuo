@@ -187,11 +187,6 @@ const QUEUE_META={
  watch:['启动观察','已有部分证据，等待更多信号补齐'],
  avoid:['风险回避','商品结构冲突、趋势衰竭或商品数据缺口较重']
 };
-function optionBadge(status){
- const cls=status.status==='usable'?'up':status.status==='avoid'?'down':status.status==='watch'?'sector-counter':'muted';
- const detail=status.best?.ts_code?`<span>${status.best.ts_code}</span>`:'';
- return `<small class="option-status ${cls}">${status.label}${detail}</small>`;
-}
 function opportunityCard(item){
  const row=item.record;
  const sideClass=item.side==='long'?'up':item.side==='short'?'down':'muted';
@@ -200,7 +195,7 @@ function opportunityCard(item){
   <p class="opportunity-action">${item.action}</p>
   <ul>${(item.reasons.length?item.reasons:['暂无足够证据']).map(reason=>`<li>${reason}</li>`).join('')}</ul>
   <div class="opportunity-risk"><span>风险</span>${item.risk}</div>
-  <footer>${optionBadge(item.optionStatus)}<button class="mini-action" data-code="${item.code}" data-action="detail">详情</button><button class="mini-action" data-code="${item.code}" data-action="options">T型</button></footer>
+  <footer><button class="mini-action" data-code="${item.code}" data-action="detail">详情</button><button class="mini-action" data-code="${item.code}" data-action="options">T型</button></footer>
  </article>`;
 }
 function opportunitySection(key,items){
@@ -209,7 +204,7 @@ function opportunitySection(key,items){
  return `<section class="opportunity-queue"><div class="section-heading"><div><h2>${title}<span class="queue-count">${items.length}</span></h2><div class="muted small">${note}</div></div></div><div class="opportunity-grid">${shown.length?shown.map(opportunityCard).join(''):`<div class="empty mini">暂无${title}标的</div>`}</div></section>`;
 }
 function renderOpportunityWorkbench(){
- const queues=buildOpportunityRows(data,state.execution||{},state.optionChain||{records:[]});
+ const queues=buildOpportunityRows(data,state.execution||{});
  return `<section class="workbench-panel">${['focus','wait','watch','avoid'].map(key=>opportunitySection(key,queues[key])).join('')}</section>`;
 }
 function renderMarket(){
@@ -435,7 +430,6 @@ async function init(){
   render();
   await refreshQuotes();
   render();
-  ensureOptions().then(()=>{if(state.view==='market')render()});
   if(quoteTimer)clearInterval(quoteTimer);
   quoteTimer=setInterval(()=>{if(document.visibilityState==='visible'&&inTradingSession())refreshQuotes()},QUOTE_REFRESH_MS);
  }catch(error){

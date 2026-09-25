@@ -102,7 +102,8 @@ assert.equal(rows.wait[0].code, 'B.DCE');
 assert.equal(rows.watch[0].code, 'C.DCE');
 assert.deepEqual(rows.avoid.map(row => row.code), ['D.DCE', 'E.DCE']);
 
-// 期权只决定合约是否推荐，不得把商品从原有机会队列移走。
+// 主页商品卡片不得读取或展示任何期权结论；期权链变化不能改变商品文案。
+const commoditySnapshots = [];
 for(const optionRecords of [[], [blocked], [option()]]){
   const queues = buildOpportunityRows(
     {records: [base({ts_code: 'JM.DCE', state_v2: 'START'})]},
@@ -111,7 +112,13 @@ for(const optionRecords of [[], [blocked], [option()]]){
   );
   assert.deepEqual(queues.focus.map(row => row.code), ['JM.DCE']);
   assert.equal(queues.avoid.length, 0);
+  const row = queues.focus[0];
+  assert.equal('optionStatus' in row, false);
+  assert.equal(row.risk, '等待后续商品信号确认');
+  commoditySnapshots.push({action: row.action, reasons: row.reasons, risk: row.risk});
 }
+assert.deepEqual(commoditySnapshots[1], commoditySnapshots[0]);
+assert.deepEqual(commoditySnapshots[2], commoditySnapshots[0]);
 
 const optionIndependentOrder = buildOpportunityRows(
   {records: [
