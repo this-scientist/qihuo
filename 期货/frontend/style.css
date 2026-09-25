@@ -210,6 +210,10 @@ tr.opp-counter{opacity:.6}
 .opportunity-card li{margin:2px 0}
 .opportunity-risk{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;align-items:start;color:#6b5a45;background:#fff8ea;border:1px solid #f0dfbd;border-radius:6px;padding:8px 9px;font-size:12px;line-height:1.55}
 .opportunity-risk span{font-weight:700;color:#9a6b21}
+.opportunity-risk-reasons{min-width:0}
+.opportunity-risk-reasons p{margin:0 0 3px;overflow-wrap:anywhere}
+.opportunity-risk-reasons p:last-of-type{margin-bottom:0}
+.opportunity-risk-reasons small{display:block;margin-top:4px;color:#8a7658;font-size:10px}
 .opportunity-card footer{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:auto}
 .option-status{display:inline-flex;gap:6px;align-items:center;border-radius:999px;background:#f3f6f9;padding:4px 8px;font-size:11px;line-height:1.2}
 .option-status span{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}

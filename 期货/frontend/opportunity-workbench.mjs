@@ -7,6 +7,7 @@ const codeOf = record => record.ts_code;
 const sideOf = record => record.decision_side || record.trend_direction || record.direction;
 const optionSideFor = side => side === 'long' ? 'C' : side === 'short' ? 'P' : null;
 const signed = value => finite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}` : null;
+const truthy = value => value === true || String(value).toLowerCase() === 'true';
 
 export function optionExpressionStatus(record, optionRows = []){
   const desiredSide = optionSideFor(sideOf(record));
@@ -63,12 +64,40 @@ function reasonList(record, executionItem){
   return [...new Set(reasons)].slice(0, 3);
 }
 
-function riskText(record, executionItem){
-  if(record.state_v2 === 'EXHAUST')return '趋势进入衰竭或过度延伸区';
-  if(record.structure_confirm === 'CONFLICT')return '结构与价格趋势背离';
-  if(finite(record.extension_atr) && record.extension_atr > 3)return '偏离MA20超过3ATR，追单风险高';
-  if(executionItem?.exec_score != null && executionItem.exec_score < 50)return '当前位置可执行性不足';
-  return '等待后续商品信号确认';
+export function commodityReminderReasons(record, executionItem){
+  const reasons = [];
+  if(record.state_v2 === 'EXHAUST')reasons.push('趋势进入衰竭或过度延伸区');
+  if(record.structure_confirm === 'CONFLICT')reasons.push('商品结构与价格趋势背离');
+  if(finite(record.extension_atr) && record.extension_atr > 3)reasons.push(`偏离MA20达到${record.extension_atr.toFixed(1)}ATR，追单风险高`);
+  if(finite(executionItem?.exec_score) && executionItem.exec_score < 50)reasons.push(`盘中可执行性${executionItem.exec_score}，当前位置不足50`);
+
+  if(['WAIT','PREPARE'].includes(record.state_v2)){
+    if(!finite(record.dir_score))reasons.push('方向分缺失，暂时无法确认趋势方向');
+    else if(Math.abs(record.dir_score) < 25)reasons.push(`方向分${record.dir_score.toFixed(1)}，未达到±25方向门槛`);
+    if(!finite(record.start_score))reasons.push('启动分缺失，暂时无法确认启动强度');
+    else if(record.start_score < 70)reasons.push(`启动分${record.start_score.toFixed(1)}，未达到70启动门槛`);
+    if(!truthy(record.signal_base_breakout) && !truthy(record.technical_start))reasons.push('尚未出现基底突破或技术启动');
+    if(!finite(record.adx))reasons.push('ADX缺失，暂时无法确认趋势强度');
+    else if(record.adx < 20)reasons.push(`ADX ${record.adx.toFixed(1)}，趋势强度未达到20`);
+    if(!finite(record.volume_ratio))reasons.push('商品量比缺失，暂时无法确认量能');
+    else if(record.volume_ratio < 1.2)reasons.push(`商品量比${record.volume_ratio.toFixed(2)}，尚未达到1.20`);
+    if(!finite(record.oi_change5))reasons.push('商品OI五日变化缺失，暂时无法确认增仓');
+    else if(record.oi_change5 <= 0)reasons.push(`商品OI五日${signed(record.oi_change5)}%，未出现增仓`);
+  }
+
+  if(record.structure_confirm === 'UNKNOWN')reasons.push('商品结构数据不足，尚无法确认是否同向');
+  else if(record.structure_confirm === 'NEUTRAL')reasons.push('商品结构尚未同向确认');
+  if(reasons.length)return [...new Set(reasons)];
+
+  const side = sideOf(record);
+  if(side === 'long' && finite(record.today_support))return [`失效关注：跌破今日支撑${record.today_support.toFixed(2)}`];
+  if(side === 'short' && finite(record.today_resistance))return [`失效关注：突破今日压力${record.today_resistance.toFixed(2)}`];
+  return ['当前商品信号较完整，主要观察趋势状态是否转弱'];
+}
+
+export function reminderDisplay(reasons, limit=2){
+  const all = (reasons || []).filter(Boolean);
+  return {visible: all.slice(0, limit), full: all.join('；'), hiddenCount: Math.max(0, all.length-limit)};
 }
 
 function queueFor(record, executionItem){
@@ -107,6 +136,7 @@ export function buildOpportunityRows(data, execution = {}){
     const code = codeOf(record);
     const executionItem = execution?.[code] || null;
     const queue = queueFor(record, executionItem);
+    const riskReasons = commodityReminderReasons(record, executionItem);
     const row = {
       code,
       name: record.name || code,
@@ -118,7 +148,8 @@ export function buildOpportunityRows(data, execution = {}){
       dirScore: record.dir_score ?? null,
       action: actionLabel(queue, record),
       reasons: reasonList(record, executionItem),
-      risk: riskText(record, executionItem),
+      risk: riskReasons[0],
+      riskReasons,
       execution: executionItem,
       record,
       queue,

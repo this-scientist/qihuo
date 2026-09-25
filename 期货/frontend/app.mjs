@@ -1,7 +1,7 @@
 import {renderChart,renderCandlestickChart} from './charts.mjs';
 import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
-import {buildOpportunityRows} from './opportunity-workbench.mjs';
+import {buildOpportunityRows,reminderDisplay} from './opportunity-workbench.mjs';
 
 const $=id=>document.getElementById(id);
 const app=$('app');
@@ -52,6 +52,7 @@ const tone=value=>value>0?'up':value<0?'down':'muted';
 const sectorClass=row=>row.sector_counter?'sector-counter':tone(row.sector_strength);
 const sectorNote=row=>row.sector_members>1?`第${row.sector_rank}/${row.sector_members}`:(row.sector_members?'类内仅1个':'');
 const price=value=>value==null||Number.isNaN(value)?'—':Number(value).toLocaleString('zh-CN',{maximumFractionDigits:4});
+const escapeHtml=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const contractOf=row=>row.main_code||codeOf(row);
 const quoteOf=row=>state.quotes?.[contractOf(row)]||null;
 const quoteStale=quote=>quote&&quote.age_seconds!=null&&quote.age_seconds>300;
@@ -191,11 +192,12 @@ const QUEUE_META={
 function opportunityCard(item){
  const row=item.record;
  const sideClass=item.side==='long'?'up':item.side==='short'?'down':'muted';
+ const reminder=reminderDisplay(item.riskReasons?.length?item.riskReasons:[item.risk]);
  return `<article class="opportunity-card queue-${item.queue}" data-code="${item.code}">
   <header><div><strong>${item.name}</strong><span>${item.mainCode} · ${item.sector}</span></div><em class="${sideClass}">${directionText(item.side)} · ${stateText(item.state)}</em></header>
   <p class="opportunity-action">${item.action}</p>
   <ul>${(item.reasons.length?item.reasons:['暂无足够证据']).map(reason=>`<li>${reason}</li>`).join('')}</ul>
-  <div class="opportunity-risk"><span>风险</span>${item.risk}</div>
+  <div class="opportunity-risk" title="${escapeHtml(reminder.full)}"><span>提醒</span><div class="opportunity-risk-reasons">${reminder.visible.map(reason=>`<p>${escapeHtml(reason)}</p>`).join('')}${reminder.hiddenCount?`<small>另有 ${reminder.hiddenCount} 项，悬浮查看全部</small>`:''}</div></div>
   <footer><button class="mini-action" data-code="${item.code}" data-action="detail">详情</button><button class="mini-action" data-code="${item.code}" data-action="options">T型</button></footer>
  </article>`;
 }

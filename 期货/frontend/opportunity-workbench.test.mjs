@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildOpportunityRows, optionExpressionStatus} from './opportunity-workbench.mjs';
+import {buildOpportunityRows, commodityReminderReasons, optionExpressionStatus, reminderDisplay} from './opportunity-workbench.mjs';
 
 const base = overrides => ({
   ts_code: 'JM.DCE',
@@ -18,6 +18,8 @@ const base = overrides => ({
   oi_change5: 3,
   volume_ratio: 1.5,
   extension_atr: 1.2,
+  today_support: 95,
+  today_resistance: 110,
   ...overrides,
 });
 
@@ -102,6 +104,25 @@ assert.equal(rows.wait[0].code, 'B.DCE');
 assert.equal(rows.watch[0].code, 'C.DCE');
 assert.deepEqual(rows.avoid.map(row => row.code), ['D.DCE', 'E.DCE']);
 
+assert.deepEqual(commodityReminderReasons(base()), ['失效关注：跌破今日支撑95.00']);
+assert.deepEqual(commodityReminderReasons(base({
+  state_v2: 'PREPARE', structure_confirm: 'NEUTRAL', dir_score: 32, start_score: 58,
+  signal_base_breakout: false, technical_start: false, adx: 16,
+  volume_ratio: .9, oi_change5: -1,
+})), [
+  '启动分58.0，未达到70启动门槛',
+  '尚未出现基底突破或技术启动',
+  'ADX 16.0，趋势强度未达到20',
+  '商品量比0.90，尚未达到1.20',
+  '商品OI五日-1.0%，未出现增仓',
+  '商品结构尚未同向确认',
+]);
+assert.equal(commodityReminderReasons(base({state_v2: 'WAIT', decision_side: 'neutral', dir_score: 12, start_score: 0}))[0], '方向分12.0，未达到±25方向门槛');
+assert.equal(commodityReminderReasons(base(), {exec_score: 42})[0], '盘中可执行性42，当前位置不足50');
+assert.deepEqual(reminderDisplay(['原因一','原因二','原因三']), {
+  visible: ['原因一','原因二'], full: '原因一；原因二；原因三', hiddenCount: 1,
+});
+
 // 主页商品卡片不得读取或展示任何期权结论；期权链变化不能改变商品文案。
 const commoditySnapshots = [];
 for(const optionRecords of [[], [blocked], [option()]]){
@@ -114,7 +135,8 @@ for(const optionRecords of [[], [blocked], [option()]]){
   assert.equal(queues.avoid.length, 0);
   const row = queues.focus[0];
   assert.equal('optionStatus' in row, false);
-  assert.equal(row.risk, '等待后续商品信号确认');
+  assert.equal(row.risk, '失效关注：跌破今日支撑95.00');
+  assert.deepEqual(row.riskReasons, ['失效关注：跌破今日支撑95.00']);
   commoditySnapshots.push({action: row.action, reasons: row.reasons, risk: row.risk});
 }
 assert.deepEqual(commoditySnapshots[1], commoditySnapshots[0]);
