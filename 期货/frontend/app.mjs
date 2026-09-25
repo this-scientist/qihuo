@@ -5,8 +5,9 @@ import {buildOpportunityRows} from './opportunity-workbench.mjs';
 
 const $=id=>document.getElementById(id);
 const app=$('app');
-const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionChain:null,search:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null};
+const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionChain:null,search:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{}};
 let data;
+let klineModalController=null;
 
 const VIEW_TITLES={
  market:['COMMODITIES','商品总览',''],
@@ -226,10 +227,15 @@ function renderDetail(){
  if(!row){app.innerHTML=header()+'<p class="empty">当前日期暂无商品数据</p>';return}
  app.innerHTML=header()+`<section class="detail-layout">
   <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / 均线',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
-  <article class="decision-panel chart-card"><div class="section-heading"><h2>日线K线与均线</h2></div><div id="single-chart"></div></article>
+  <article class="decision-panel chart-card"><div class="section-heading"><div><h2>日线K线、量仓与关键价位</h2><div class="muted small">点击图表放大 · 红色压力 · 绿色支撑</div></div><button type="button" data-open-kline>放大查看</button></div><div id="single-chart" class="chart-preview" data-open-kline role="button" tabindex="0" aria-label="放大查看可缩放K线图"></div></article>
   <article class="decision-panel"><h2>量仓</h2><div class="structure-grid">${[['主力OI（手）',count(row.main_oi)],['次主力OI（手）',count(row.secondary_oi)],['主次合计OI（手）',count(row.pair_oi)],['固定月对OI 5日',pct(row.oi_change5)],['固定月对OI 20日',pct(row.oi_change20)],['成交量比',fmt(row.volume_ratio)],['量价表现',row.structure_evidence?.oi?.state],['移仓迹象',row.rollover_transfer?'有':row.rollover_transfer===false?'无':'缺失'],['席位多空持仓','未接入']].map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div></article>
   <article class="decision-panel"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>
- </section>`;
+ </section>
+ <dialog id="kline-modal" class="kline-modal" aria-labelledby="kline-modal-title"><div class="kline-modal-shell">
+  <header class="kline-modal-header"><div><span class="eyebrow">INTERACTIVE CHART</span><h2 id="kline-modal-title">${row.name} · 日线结构</h2><p>滚轮缩放 · 横向拖动 · 双击复位 · 拖动红绿虚线校正价位</p></div><div class="kline-modal-actions"><button type="button" data-chart-zoom-out aria-label="缩小时间范围">−</button><button type="button" data-chart-reset>重置视图</button><button type="button" data-chart-zoom-in aria-label="放大时间范围">＋</button><button type="button" data-reset-levels>恢复系统价位</button><button type="button" class="modal-close" data-close-kline aria-label="关闭">×</button></div></header>
+  <div id="kline-modal-chart"></div>
+  <footer class="kline-modal-footer"><span><i class="support-key"></i>支撑位：可上下拖动</span><span><i class="resistance-key"></i>压力位：可上下拖动</span><span>成交量为柱，持仓量为棕色线</span></footer>
+ </div></dialog>`;
  renderSingleChart(row);
 }
 function optionTargetSide(row){return isShort(row)?'P':isLong(row)?'C':null}
@@ -334,7 +340,28 @@ function sectorSeries(sector){
 }
 function renderSingleChart(row){
  if(!data.candles?.[codeOf(row)])return;
- renderCandlestickChart($('single-chart'),{candles:data.candles[codeOf(row)],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[]},{window:Number($('window')?.value||60),title:`${row.name}日线K线与均线`});
+ renderCandlestickChart($('single-chart'),chartInput(row),{window:Number($('window')?.value||60),title:`${row.name}日线K线、成交量与持仓量`});
+}
+function chartLevels(row){
+ const manual=state.manualLevels[codeOf(row)]||{};
+ return [
+  {id:'support',kind:'support',label:'今日支撑',value:manual.support??row.today_support,systemValue:row.today_support},
+  {id:'resistance',kind:'resistance',label:'今日压力',value:manual.resistance??row.today_resistance,systemValue:row.today_resistance},
+ ];
+}
+function chartInput(row){
+ return {candles:data.candles[codeOf(row)]||[],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[],levels:chartLevels(row)};
+}
+function saveManualLevels(row,levels){
+ state.manualLevels[codeOf(row)]=Object.fromEntries(levels.map(level=>[level.id,level.value]));
+}
+function openKlineModal(row){
+ const dialog=$('kline-modal'),host=$('kline-modal-chart');if(!dialog||!host)return;
+ if(!dialog.open)dialog.showModal();
+ requestAnimationFrame(()=>{klineModalController=renderCandlestickChart(host,chartInput(row),{window:Number($('window')?.value||60),title:`${row.name}可缩放日线K线`,interactive:true,onLevelChange:levels=>saveManualLevels(row,levels)})});
+}
+function closeKlineModal(){
+ const dialog=$('kline-modal');if(dialog?.open)dialog.close();
 }
 function render(){
  if(!data)return;
@@ -357,6 +384,20 @@ function wireView(){
  document.querySelectorAll('[data-candidate-tab]').forEach(button=>button.addEventListener('click',()=>{state.candidateTab=button.dataset.candidateTab;renderCandidates();wireView();}));
  document.querySelectorAll('[data-option-mode]').forEach(button=>button.addEventListener('click',()=>{state.optionMode=button.dataset.optionMode;renderOptions().then(wireView);}));
  document.querySelectorAll('[data-jump-options]').forEach(button=>button.addEventListener('click',()=>setView('options')));
+ const detailRow=state.view==='detail'?selectedRow():null;
+ if(detailRow){
+  document.querySelectorAll('[data-open-kline]').forEach(node=>{
+   node.addEventListener('click',()=>openKlineModal(detailRow));
+   node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openKlineModal(detailRow)}});
+  });
+  document.querySelector('[data-close-kline]')?.addEventListener('click',closeKlineModal);
+  document.querySelector('[data-chart-zoom-in]')?.addEventListener('click',()=>klineModalController?.zoomIn());
+  document.querySelector('[data-chart-zoom-out]')?.addEventListener('click',()=>klineModalController?.zoomOut());
+  document.querySelector('[data-chart-reset]')?.addEventListener('click',()=>klineModalController?.resetView());
+  document.querySelector('[data-reset-levels]')?.addEventListener('click',()=>klineModalController?.resetLevels());
+  $('kline-modal')?.addEventListener('click',event=>{if(event.target===event.currentTarget)closeKlineModal()});
+  $('kline-modal')?.addEventListener('close',()=>renderSingleChart(detailRow));
+ }
  document.querySelectorAll('.decision-table').forEach(enableTableSorting);
 }
 function wireRows(){

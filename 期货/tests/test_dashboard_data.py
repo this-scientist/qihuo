@@ -1,9 +1,24 @@
 import unittest
 import pandas as pd
-from dashboard_data import classify, aggregate_curves, public_metrics, sector_trend, sector_relative_strength
+from dashboard_data import (classify, aggregate_curves, public_metrics, sector_trend,
+    sector_relative_strength, chart_candle, CHART_SCHEMA_VERSION, chart_schema_current)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_chart_candle_carries_volume_and_open_interest_without_inventing_missing_values(self):
+        complete = chart_candle('20260924', pd.Series({
+            'open': 100, 'high': 105, 'low': 98, 'close': 103, 'vol': 2345, 'oi': 6789,
+        }))
+        missing = chart_candle('20260925', pd.Series({
+            'open': 103, 'high': 104, 'low': 99, 'close': 101, 'vol': float('nan'), 'oi': None,
+        }))
+        self.assertEqual(complete, ['20260924', 100.0, 105.0, 98.0, 103.0, 2345.0, 6789.0])
+        self.assertEqual(missing, ['20260925', 103.0, 104.0, 99.0, 101.0, None, None])
+
+    def test_chart_schema_rejects_cached_payloads_without_volume_and_open_interest(self):
+        self.assertFalse(chart_schema_current({'candles': {'RB.SHF': [['20260924', 1, 2, 0.5, 1.5]]}}))
+        self.assertTrue(chart_schema_current({'chart_schema_version': CHART_SCHEMA_VERSION}))
+
     def test_black_members_and_unique_classification(self):
         for code in ['RB.SHF','HC.SHF','I.DCE','J.DCE','JM.DCE','SF.ZCE','SM.ZCE']:
             self.assertEqual(classify(code), '黑色')

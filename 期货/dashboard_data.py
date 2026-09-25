@@ -13,6 +13,7 @@ from decision_v2 import build_decisions, unify_records
 from trend_model import MODEL_VERSION
 from futures_signals import chart_signals, signal_for_history
 
+CHART_SCHEMA_VERSION = 2
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
 PERCENT_FIELDS = {'return1','return5','return20','return60','return120','slope20','slope60','slope120',
     'trend_spread','trend_spread_change5','atr_change5','oi_change5','oi_change20',
@@ -38,6 +39,18 @@ def public_metrics(row):
             numeric = float(value)
             output[key] = numeric * (100 if key in PERCENT_FIELDS else 1) if math.isfinite(numeric) else None
     return output
+
+
+def chart_candle(day, row):
+    """Compact OHLCV/OI row for the browser chart; missing activity stays missing."""
+    def finite(field):
+        value = row.get(field)
+        return round(float(value), 6) if value is not None and pd.notna(value) and math.isfinite(float(value)) else None
+    return [day, *(finite(field) for field in ['open', 'high', 'low', 'close', 'vol', 'oi'])]
+
+
+def chart_schema_current(payload):
+    return payload.get('chart_schema_version') == CHART_SCHEMA_VERSION
 
 
 def aggregate_curves(curves):
@@ -179,8 +192,7 @@ def build_payload(root, asof,phase_settings=None):
     for code, table in histories.items():
         shared = table.set_index('trade_date').loc[common]
         curves[code] = [[day, round(float(value),6)] for day,value in shared.close.items()]
-        candles[code] = [[day, round(float(row['open']),6), round(float(row['high']),6), round(float(row['low']),6), round(float(row['close']),6)]
-                         for day,row in shared.iterrows()]
+        candles[code] = [chart_candle(day, row) for day,row in shared.iterrows()]
         moving[code] = {key:[round(float(v),6) if pd.notna(v) else None for v in shared[key]] for key in ['ma20','ma60','ma120']}
         technical_signals[code] = chart_signals(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
@@ -237,6 +249,7 @@ def build_payload(root, asof,phase_settings=None):
     for row in records + decisions:
         row.update(strength.get(row['ts_code'], unscored))
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
+        chart_schema_version=CHART_SCHEMA_VERSION,
         technical_signals=technical_signals,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=sector_groups, factors=factors, quality=quality, exclusions=exclusions,

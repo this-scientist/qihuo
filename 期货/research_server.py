@@ -10,7 +10,7 @@ from dataclasses import asdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse,parse_qs
-from dashboard_data import build_payload, LABELS, BOOLEAN_FIELDS
+from dashboard_data import build_payload, LABELS, BOOLEAN_FIELDS, chart_schema_current
 from decision_v2 import build_decisions, unify_records
 from trend_model import MODEL_VERSION
 from collector import DataError, atomic_json, read_csv
@@ -201,7 +201,7 @@ class ResearchStore:
             return self.payloads[asof]
     def _load(self,asof):
         cached=mysql_cache_get(asof,'api:data')
-        if cached is not None and cached.get('model_version')==MODEL_VERSION:
+        if cached is not None and cached.get('model_version')==MODEL_VERSION and chart_schema_current(cached):
             return ensure_decision_payload(cached)
         sources=[self.root/'updates'/asof,self.root]
         try:sources.append(snapshot_source(self.root,asof))
