@@ -19,6 +19,7 @@ const SIGNAL_LABELS=(direction,m={})=>{
 const pct=value=>value==null?'—':`${value>=0?'+':''}${Number(value).toFixed(2)}%`;
 const GLOSSARY={
  '期权综合分':'0–100规则分：标的证据、期限结构、IV与期权流动性十项加权，缺失项归一；不同于总览的标的爆发指数，不代表胜率。',
+ '商品排序分 / 期权综合分':'前者只用商品自身因子并决定榜单顺序；后者加入IV与期权流动性，仅用于复核期权表达。',
  '组合信号':'十条多空条件成立的条数，分母只计有数据的条件；8条以上才值得重仓研究，★=四重共振同时成立。',
  '方向RPS20':'该品种近20日涨跌幅在全市场的百分位名次（做空已翻转为100−原始值）。≥90=最强/最弱的10%，且方向与交易一致才有意义。',
  'RPS五日加速度':'RPS20比5个交易日前变化了多少：多头为正、空头为负且幅度大，代表相对强度正朝交易方向加速。',
@@ -157,7 +158,7 @@ function listColumns(record){
  const m=record.metrics;
  return [
   {text:record.sector},
-  {text:fmt(record.explosion_score)+(record.tenbagger?.label==='高'?' · 10倍高':''),cls:'score-cell'},
+  {text:`${fmt(record.underlying_score)} / ${fmt(record.explosion_score)}`+(record.tenbagger?.label==='高'?' · 10倍高':''),cls:'score-cell'},
   {text:`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`},
   {text:fmt(m.rps20)},
   {text:signed(m.rps_accel)},
@@ -186,7 +187,7 @@ function renderList(){
  const list=rows();
  $('list-title').textContent=TAB_TITLES[direction]??'候选';
  $('list-count').textContent=`${list.length}个`;
- $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'期权综合分 · 标的证据、IV与合约流动性';
+ $('scan-summary').textContent=direction==='extended'?scanner.extension_note:'榜单只按商品自身因子排序；IV、量仓与期权资格只筛具体合约';
  renderRows(list,direction==='extended'?'当前没有处于过度延伸阶段的品种。':'当前方向没有可排名的品种。');
 }
 async function loadCustom(){
@@ -245,7 +246,7 @@ function renderDetail(){
  $('detail-title').textContent=`${record.name} · ${record.ts_code} · ${dir==='long'?'做多':'做空'}`;
  const m=record.metrics;
  $('detail-summary').replaceChildren();
- [['期权综合分',fmt(record.explosion_score)],['组合信号',`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`],
+ [['商品排序分',fmt(record.underlying_score)],['期权综合分',fmt(record.explosion_score)],['组合信号',`${record.signals_met}/${record.signals_applicable}${record.resonance?' ★':''}`],
   ['趋势阶段',phaseText(record)],['阶段持续',record.phase_age==null?'—':`${record.phase_age}个交易日`],['阶段原因',record.phase_reason??'—'],
   ['原版趋势分',fmt(record.trend_score)],['原版启动分',fmt(record.startup_score)],
   ['启动命中',`${record.startup_hits}/9`],['方向RPS20',fmt(m.rps20)],['RPS加速度',signed(m.rps_accel)],['偏离MA20',`${fmt(m.extension_atr)} ATR`],['ATR分位',m.atr_percentile==null?'—':fmt(m.atr_percentile)],

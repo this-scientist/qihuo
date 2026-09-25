@@ -84,3 +84,24 @@ assert.equal(rows.focus[0].code, 'A.DCE');
 assert.equal(rows.wait[0].code, 'B.DCE');
 assert.equal(rows.watch[0].code, 'C.DCE');
 assert.deepEqual(rows.avoid.map(row => row.code), ['D.DCE', 'E.DCE']);
+
+// 期权只决定合约是否推荐，不得把商品从原有机会队列移走。
+for(const optionRecords of [[], [blocked], [option()]]){
+  const queues = buildOpportunityRows(
+    {records: [base({ts_code: 'JM.DCE', state_v2: 'START'})]},
+    {},
+    {records: optionRecords},
+  );
+  assert.deepEqual(queues.focus.map(row => row.code), ['JM.DCE']);
+  assert.equal(queues.avoid.length, 0);
+}
+
+const optionIndependentOrder = buildOpportunityRows(
+  {records: [
+    base({ts_code: 'A.DCE', state_v2: 'WAIT', start_score: 50}),
+    base({ts_code: 'B.DCE', state_v2: 'WAIT', start_score: 50}),
+  ]},
+  {},
+  {records: [{...blocked, main_code: 'B.DCE'}]},
+);
+assert.deepEqual(optionIndependentOrder.avoid.map(row => row.code), ['A.DCE', 'B.DCE']);

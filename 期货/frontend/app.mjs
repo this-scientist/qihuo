@@ -185,7 +185,7 @@ const QUEUE_META={
  focus:['重点研究','方向与状态更清楚，优先打开详情复核'],
  wait:['等待位置','逻辑可看，但当前位置或延伸度不适合追'],
  watch:['启动观察','已有部分证据，等待更多信号补齐'],
- avoid:['风险回避','结构冲突、衰竭、期权风险或数据缺口较重']
+ avoid:['风险回避','商品结构冲突、趋势衰竭或商品数据缺口较重']
 };
 function optionBadge(status){
  const cls=status.status==='usable'?'up':status.status==='avoid'?'down':status.status==='watch'?'sector-counter':'muted';

@@ -85,7 +85,7 @@ function riskText(record, optionStatus, executionItem){
 
 function queueFor(record, optionStatus, executionItem){
   const state = record.state_v2;
-  if(state === 'EXHAUST' || record.structure_confirm === 'CONFLICT' || optionStatus.status === 'avoid')return 'avoid';
+  if(state === 'EXHAUST' || record.structure_confirm === 'CONFLICT')return 'avoid';
   if((finite(record.extension_atr) && record.extension_atr > 3) || (executionItem?.exec_score != null && executionItem.exec_score < 50))return 'wait';
   if(state === 'START' || state === 'TREND')return 'focus';
   if(state === 'PREPARE')return 'watch';
@@ -102,8 +102,7 @@ function actionLabel(queue, record, optionStatus){
 function avoidSeverity(row){
   if(row.state === 'EXHAUST')return 0;
   if(row.record?.structure_confirm === 'CONFLICT')return 1;
-  if(row.optionStatus?.status === 'avoid')return 2;
-  return 3;
+  return 2;
 }
 
 function sortRows(a, b){
