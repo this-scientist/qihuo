@@ -1,10 +1,41 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 import pandas as pd
 from dashboard_data import (classify, aggregate_curves, public_metrics, sector_trend,
-    sector_relative_strength, chart_candle, CHART_SCHEMA_VERSION, chart_schema_current)
+    sector_relative_strength, chart_candle, CHART_SCHEMA_VERSION, chart_schema_current,
+    PAYLOAD_SCHEMA_VERSION, load_holding_summaries, missing_holding,
+    payload_schema_current)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_payload_schema_rejects_cache_without_holding_contract(self):
+        self.assertFalse(payload_schema_current({}))
+        self.assertFalse(payload_schema_current({'payload_schema_version': PAYLOAD_SCHEMA_VERSION - 1}))
+        self.assertTrue(payload_schema_current({'payload_schema_version': PAYLOAD_SCHEMA_VERSION}))
+
+    def test_holding_summaries_are_date_checked_and_keyed_by_logical_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/'processed/holding/20260924.json'
+            path.parent.mkdir(parents=True)
+            record = dict(ts_code='M.DCE', holding_contract='M2701.DCE',
+                          holding_status='available')
+            path.write_text(json.dumps({'asof': '20260924', 'records': [record]}), encoding='utf-8')
+            rows = load_holding_summaries(root, '20260924')
+            self.assertEqual(rows['M.DCE']['holding_contract'], 'M2701.DCE')
+            self.assertEqual(load_holding_summaries(root, '20260923'), {})
+            path.write_text(json.dumps({'asof': '20260923', 'records': [record]}), encoding='utf-8')
+            self.assertEqual(load_holding_summaries(root, '20260924'), {})
+
+    def test_missing_holding_is_explicit_and_never_zero(self):
+        value = missing_holding('I.DCE')
+        self.assertEqual(value['ts_code'], 'I.DCE')
+        self.assertEqual(value['holding_status'], 'unavailable')
+        self.assertIsNone(value['top20_long'])
+        self.assertEqual(value['top_long_brokers'], [])
+
     def test_chart_candle_carries_volume_and_open_interest_without_inventing_missing_values(self):
         complete = chart_candle('20260924', pd.Series({
             'open': 100, 'high': 105, 'low': 98, 'close': 103, 'vol': 2345, 'oi': 6789,

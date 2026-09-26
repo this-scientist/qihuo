@@ -14,6 +14,7 @@ from trend_model import MODEL_VERSION
 from futures_signals import chart_signals, signal_for_history
 
 CHART_SCHEMA_VERSION = 2
+PAYLOAD_SCHEMA_VERSION = 2
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
 PERCENT_FIELDS = {'return1','return5','return20','return60','return120','slope20','slope60','slope120',
     'trend_spread','trend_spread_change5','atr_change5','oi_change5','oi_change20',
@@ -51,6 +52,33 @@ def chart_candle(day, row):
 
 def chart_schema_current(payload):
     return payload.get('chart_schema_version') == CHART_SCHEMA_VERSION
+
+
+def payload_schema_current(payload):
+    return payload.get('payload_schema_version') == PAYLOAD_SCHEMA_VERSION
+
+
+def missing_holding(code):
+    return dict(ts_code=code, holding_contract=None, holding_trade_date=None,
+        holding_status='unavailable', holding_reason='该主力合约没有可用席位排名',
+        top20_long=None, top20_short=None, top20_net=None,
+        top20_long_change=None, top20_short_change=None, top20_net_change=None,
+        top20_long_concentration=None, top20_short_concentration=None,
+        top_long_brokers=[], top_short_brokers=[])
+
+
+def load_holding_summaries(root, asof):
+    path = Path(root)/f'processed/holding/{asof}.json'
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    if value.get('asof') != asof or not isinstance(value.get('records'), list):
+        return {}
+    return {row['ts_code']: row for row in value['records']
+        if isinstance(row, dict) and row.get('ts_code')}
 
 
 def aggregate_curves(curves):
@@ -197,6 +225,7 @@ def build_payload(root, asof,phase_settings=None):
         technical_signals[code] = chart_signals(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]
+    holding_rows = load_holding_summaries(root, asof)
     phase_settings=phase_settings or PhaseSettings()
     phases={}
     for code,table in historical_panels(histories).items():
@@ -215,7 +244,8 @@ def build_payload(root, asof,phase_settings=None):
         record['day_change'] = ((float(close)/float(pre_settle)-1)*100
                                 if pd.notna(close) and pd.notna(pre_settle) and pre_settle > 0 else None)
         record['main_oi'] = float(bar['oi']) if pd.notna(bar.get('oi')) else None
-        record['trader_positions'] = None
+        record['trader_positions'] = holding_rows.get(
+            record['ts_code'], missing_holding(record['ts_code']))
         record.update(phases[record['ts_code']]);record['phase_match']=record['trend_direction']==record['direction']
         record['technical_start']=record['technical_start'] and record['phase_match']
     from supplements import supplement_context
@@ -250,6 +280,7 @@ def build_payload(root, asof,phase_settings=None):
         row.update(strength.get(row['ts_code'], unscored))
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
         chart_schema_version=CHART_SCHEMA_VERSION,
+        payload_schema_version=PAYLOAD_SCHEMA_VERSION,
         technical_signals=technical_signals,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=sector_groups, factors=factors, quality=quality, exclusions=exclusions,

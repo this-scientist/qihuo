@@ -8,8 +8,44 @@ from unittest.mock import patch
 from mysql_store import mysql_config
 from snapshot_store import publish_snapshot,read_snapshot,snapshot_source
 from research_server import ResearchStore,available_snapshots
+from dashboard_data import CHART_SCHEMA_VERSION, PAYLOAD_SCHEMA_VERSION
+from trend_model import MODEL_VERSION
 
 class PersistenceTests(unittest.TestCase):
+    def test_snapshot_copies_holding_raw_summary_and_quality(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'working';(source/'quality').mkdir(parents=True)
+            (source/'quality/history_run.json').write_text(json.dumps({'prepared':[]}))
+            (source/'quality/latest_run.json').write_text('{}')
+            files={
+                'raw/holding/DCE/20260924/M2701.csv':'raw rows',
+                'raw/holding/DCE/20260924/M2701.json':'receipt',
+                'processed/holding/20260924.json':'summary',
+                'quality/holding_20260924.json':'quality',
+            }
+            for relative,content in files.items():
+                path=source/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(content)
+            payload={'asof':'20260924','phase_settings':{},'records':[],'decisions':[]}
+            publish_snapshot(root,payload,source)
+            published=snapshot_source(root,'20260924')
+            for relative,content in files.items():
+                self.assertEqual((published/relative).read_text(),content)
+
+    def test_store_rebuilds_cached_payload_without_current_payload_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);asof='20260924';source=root/'updates'/asof
+            (source/'quality').mkdir(parents=True)
+            (source/'quality/history_run.json').write_text(json.dumps({'asof':asof}))
+            cached=dict(asof=asof,records=[],decisions=[],factors=[],model_version=MODEL_VERSION,
+                        chart_schema_version=CHART_SCHEMA_VERSION)
+            fresh=dict(cached,payload_schema_version=PAYLOAD_SCHEMA_VERSION)
+            store=ResearchStore.__new__(ResearchStore);store.root=root;store.phase=object()
+            with patch('research_server.mysql_cache_get',return_value=cached), \
+                    patch('research_server.build_payload',return_value=fresh) as build:
+                result=store._load(asof)
+            self.assertEqual(result['payload_schema_version'],PAYLOAD_SCHEMA_VERSION)
+            build.assert_called_once_with(source,asof,store.phase)
+
     def test_failed_publish_keeps_previous_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'working';(source/'quality').mkdir(parents=True)

@@ -14,7 +14,12 @@ def snapshot_source(root,asof):
 def publish_snapshot(root,payload,source):
     import uuid
     root,source=Path(root),Path(source);payload=dict(payload);asof=payload['asof'];version=uuid.uuid4().hex;target=root/'snapshots'/asof/version
-    paths=['quality/latest_run.json','quality/history_run.json',f'raw/selected/{asof}.csv',f'raw/curve/{asof}.csv']
+    paths=['quality/latest_run.json','quality/history_run.json',f'raw/selected/{asof}.csv',f'raw/curve/{asof}.csv',
+        f'processed/holding/{asof}.json',f'quality/holding_{asof}.json']
+    holding_root=source/'raw/holding'
+    if holding_root.exists():
+        paths.extend(str(path.relative_to(source)).replace('\\','/')
+            for path in holding_root.glob(f'*/{asof}/*') if path.is_file())
     history=json.loads((source/'quality/history_run.json').read_text(encoding='utf-8'))
     for entry in history['prepared']:
         safe=entry['ts_code'].replace('.','_')
