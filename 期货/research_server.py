@@ -239,6 +239,9 @@ class ResearchStore:
                 result=run_focused(collector,asof,asof,bool(request.get('force',False)))
                 if asof not in result['published_days']:raise DataError('日期休市或采集不完整，保留原快照')
                 missing=next((item['missing_exchanges'] for item in result.get('partial_days',[]) if item['trade_date']==asof),[])
+                self.progress('采集主力合约席位排名')
+                from holding_data import collect_update_holdings
+                collect_update_holdings(collector,source,asof,bool(request.get('force',False)))
                 self.progress('补齐历史与换月校正')
                 prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
                 self.progress('验证指标并发布快照');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))

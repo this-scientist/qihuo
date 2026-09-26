@@ -1,10 +1,15 @@
 """Validated main-contract holding rankings for display-only dashboard context."""
+import hashlib
+import json
 import math
 import re
+from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
-from collector import DataError, LIMITS, required
+from collector import (DataError, LIMITS, atomic_csv, atomic_json, read_csv,
+                       required)
 
 
 HOLDING_FIELDS = [
@@ -144,3 +149,104 @@ def summarize_holding(frame, target, main_oi):
     if any(value is not None and not 0 <= value <= 1 for value in concentrations):
         return unavailable_summary(target, 'invalid', '席位集中度超出合理范围')
     return result
+
+
+def _holding_target(row, trade_date):
+    return {
+        'ts_code': str(row.main_code),
+        'contract': str(row.ts_code),
+        'exchange': str(row.exchange),
+        'trade_date': trade_date,
+        'main_oi': (float(row.oi) if pd.notna(row.oi) else None),
+    }
+
+
+def _cached_holding(path, params, target):
+    receipt = path.with_suffix('.json')
+    if not path.exists() or not receipt.exists():
+        return None
+    try:
+        metadata = json.loads(receipt.read_text(encoding='utf-8'))
+        if (metadata.get('version') != 1 or metadata.get('api') != 'fut_holding'
+                or metadata.get('params') != params
+                or metadata.get('sha256') != hashlib.sha256(path.read_bytes()).hexdigest()):
+            return None
+        return validate_holding(read_csv(path), target)
+    except (DataError, OSError, ValueError):
+        return None
+
+
+def _save_holding(frame, path, params):
+    atomic_csv(frame, path)
+    atomic_json({
+        'version': 1,
+        'api': 'fut_holding',
+        'params': params,
+        'rows': len(frame),
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'validated_at': datetime.now().isoformat(),
+    }, path.with_suffix('.json'))
+
+
+def _status_counts(records):
+    statuses = ['available', 'numeric_only', 'unavailable', 'invalid']
+    return {status: sum(row['holding_status'] == status for row in records)
+            for status in statuses}
+
+
+def collect_main_holdings(collector, root, selected, trade_date, force=False):
+    """Collect exact real-main contracts; contract failures become status rows."""
+    root = Path(root)
+    required(selected, ['ts_code', 'main_code', 'role', 'exchange', 'oi'])
+    mains = selected[selected.role.eq('main')].copy()
+    if mains.main_code.duplicated().any():
+        raise DataError('Duplicate main contract in holding inputs')
+    records = []
+    for row in mains.itertuples(index=False):
+        target = _holding_target(row, trade_date)
+        params = holding_query(target['contract'], target['exchange'], trade_date)
+        contract = target['contract'].split('.')[0]
+        path = root/f'raw/holding/{target["exchange"]}/{trade_date}/{contract}.csv'
+        frame = None if force else _cached_holding(path, params, target)
+        try:
+            if frame is None:
+                frame = collector.call('fut_holding', **params)
+                frame = validate_holding(frame, target)
+                _save_holding(frame, path, params)
+            records.append(summarize_holding(frame, target, target['main_oi']))
+        except DataError as exc:
+            records.append(unavailable_summary(target, 'unavailable', str(exc)))
+
+    counts = _status_counts(records)
+    usable = counts['available'] + counts['numeric_only']
+    status = ('success' if usable == len(records) else
+              'partial' if usable else 'unavailable')
+    report = {
+        'asof': trade_date,
+        'status': status,
+        'counts': counts,
+        'records': records,
+        'finished_at': datetime.now().isoformat(),
+    }
+    atomic_json({'asof': trade_date, 'records': records},
+                root/f'processed/holding/{trade_date}.json')
+    atomic_json(report, root/f'quality/holding_{trade_date}.json')
+    return report
+
+
+def collect_update_holdings(collector, root, trade_date, force=False):
+    root = Path(root)
+    selected_path = root/f'raw/selected/{trade_date}.csv'
+    if selected_path.exists():
+        return collect_main_holdings(
+            collector, root, read_csv(selected_path), trade_date, force=force)
+    report = {
+        'asof': trade_date,
+        'status': 'unavailable',
+        'reason': f'selected contract snapshot unavailable: {selected_path}',
+        'counts': _status_counts([]),
+        'records': [],
+        'finished_at': datetime.now().isoformat(),
+    }
+    atomic_json(report, root/f'quality/holding_{trade_date}.json')
+    return report

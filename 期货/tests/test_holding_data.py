@@ -1,13 +1,19 @@
 import sys
+import json
+import os
+import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector import DataError
-from holding_data import (holding_query, summarize_holding, validate_holding,
+from holding_data import (collect_main_holdings, collect_update_holdings,
+                          holding_query, summarize_holding, validate_holding,
                           unavailable_summary)
 
 
@@ -142,6 +148,108 @@ class HoldingSummaryTests(unittest.TestCase):
         self.assertIsNone(summary['top20_long'])
         self.assertIsNone(summary['top20_net_change'])
         self.assertEqual(summary['top_long_brokers'], [])
+
+
+class FakeCollector:
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    def call(self, name, **params):
+        self.calls.append(dict(api=name, **params))
+        value = self.responses[params['symbol']]
+        if isinstance(value, Exception):
+            raise value
+        return value.copy()
+
+
+class HoldingCollectionTests(unittest.TestCase):
+    def selected(self):
+        return pd.DataFrame([
+            dict(ts_code='M2701.DCE', main_code='M.DCE', role='main', exchange='DCE', oi=10000),
+            dict(ts_code='M2705.DCE', main_code='M.DCE', role='secondary', exchange='DCE', oi=9000),
+            dict(ts_code='SI2611.GFE', main_code='SI.GFE', role='main', exchange='GFEX', oi=8000),
+        ])
+
+    def test_collects_only_real_main_and_keeps_contract_failures_local(self):
+        dce = holding_frame()
+        collector = FakeCollector({'M2701': dce, 'si2611': pd.DataFrame(columns=dce.columns)})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = collect_main_holdings(collector, root, self.selected(), DATE)
+            self.assertEqual([call['symbol'] for call in collector.calls], ['M2701', 'si2611'])
+            self.assertTrue(all(call['api'] == 'fut_holding' for call in collector.calls))
+            self.assertEqual(report['counts']['available'], 1)
+            self.assertEqual(report['counts']['unavailable'], 1)
+            self.assertFalse((root/'raw/holding/DCE'/DATE/'M2705.csv').exists())
+            raw = root/'raw/holding/DCE'/DATE/'M2701.csv'
+            receipt = raw.with_suffix('.json')
+            self.assertTrue(raw.exists())
+            self.assertTrue(receipt.exists())
+            self.assertEqual(json.loads(receipt.read_text(encoding='utf-8'))['api'], 'fut_holding')
+            payload = json.loads((root/f'processed/holding/{DATE}.json').read_text(encoding='utf-8'))
+            self.assertEqual(payload['asof'], DATE)
+            self.assertEqual([row['ts_code'] for row in payload['records']], ['M.DCE', 'SI.GFE'])
+            self.assertEqual(payload['records'][1]['holding_status'], 'unavailable')
+            quality = json.loads((root/f'quality/holding_{DATE}.json').read_text(encoding='utf-8'))
+            self.assertEqual(quality['counts'], report['counts'])
+
+    def test_valid_cache_avoids_second_network_call(self):
+        collector = FakeCollector({'M2701': holding_frame(), 'si2611': pd.DataFrame(columns=holding_frame().columns)})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = collect_main_holdings(collector, root, self.selected(), DATE)
+            self.assertEqual(len(collector.calls), 2)
+            collector.responses = {'M2701': DataError('network should not run'),
+                                   'si2611': pd.DataFrame(columns=holding_frame().columns)}
+            second = collect_main_holdings(collector, root, self.selected(), DATE)
+            self.assertEqual(len(collector.calls), 3)
+            self.assertEqual(first['records'][0], second['records'][0])
+
+    def test_missing_selected_file_returns_explicit_report(self):
+        collector = FakeCollector({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = collect_update_holdings(collector, root, DATE)
+            self.assertEqual(report['status'], 'unavailable')
+            self.assertIn('selected', report['reason'])
+            self.assertEqual(report['counts']['available'], 0)
+            self.assertTrue((root/f'quality/holding_{DATE}.json').exists())
+
+    def test_research_update_collects_holdings_after_main_contracts_publish(self):
+        with patch.dict(os.environ, {
+                'OAR_TUSHARE_TOKEN': 'test-token',
+                'OAR_TUSHARE_HTTP_URL': 'https://example.invalid'}):
+            import research_server
+            from trend_model import MODEL_VERSION
+
+        collector = object()
+        payload = dict(asof=DATE, quality={'success': True}, records=[], decisions=[],
+                       factors=[], model_version=MODEL_VERSION, phase_settings={})
+        store = research_server.ResearchStore.__new__(research_server.ResearchStore)
+        store.root = Path('test-root')
+        store.lock = threading.RLock()
+        store.job = {'status': 'queued'}
+        store.phase = object()
+        store.payloads = {}
+        store.option_cache = {}
+        store._persist_state = Mock()
+        store.copy_supplements = Mock()
+
+        with patch('fetch_futures_data.make_collector', return_value=collector), \
+                patch('focused.run_focused', return_value={
+                    'published_days': [DATE], 'partial_days': []}), \
+                patch('holding_data.collect_update_holdings') as collect, \
+                patch('history.prepare_history'), \
+                patch('research_server.read_csv', return_value=pd.DataFrame()), \
+                patch('research_server.build_payload', return_value=payload), \
+                patch('research_server.publish_snapshot', return_value=payload), \
+                patch('research_server.mysql_cache_put', return_value=True):
+            store._worker('update', DATE, {'force': False})
+
+        collect.assert_called_once_with(
+            collector, store.root/'updates'/DATE, DATE, False)
+        self.assertEqual(store.job['status'], 'success')
 
 
 if __name__ == '__main__':
