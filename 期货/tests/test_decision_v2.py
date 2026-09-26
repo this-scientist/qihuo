@@ -49,6 +49,20 @@ def side_row(direction, **overrides):
 
 
 class DecisionV2Tests(unittest.TestCase):
+    def test_display_only_holding_data_does_not_change_decision_fields(self):
+        long = side_row('long', return5=3.2, oi_change5=7.5, phase='持续趋势')
+        short = side_row('short', return5=3.2, oi_change5=7.5)
+        baseline = build_decisions([long, short])[0]
+        holding = dict(holding_status='available', top20_net=12345,
+                       top20_net_change=-500, top_long_brokers=[])
+        enriched = build_decisions([
+            dict(long, trader_positions=holding),
+            dict(short, trader_positions=holding),
+        ])[0]
+        for field in ['decision_side', 'dir_score', 'state_v2', 'structure_score',
+                      'v2_rank', 'option_action']:
+            self.assertEqual(enriched[field], baseline[field])
+
     def test_strong_long_allows_only_call(self):
         long = side_row('long', trend_score=84, score_ma=20, score_quality=15, score_rps=20,
             directional_rps20=92, return5=3.2, oi_change5=7.5, spread_change5=12,
