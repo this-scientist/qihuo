@@ -243,7 +243,12 @@ class ResearchStore:
                 missing=next((item['missing_exchanges'] for item in result.get('partial_days',[]) if item['trade_date']==asof),[])
                 self.progress('采集主力合约席位排名')
                 from holding_data import collect_update_holdings
-                collect_update_holdings(collector,source,asof,bool(request.get('force',False)))
+                try:
+                    collect_update_holdings(
+                        collector,source,asof,bool(request.get('force',False)))
+                except Exception:
+                    # 席位排名只用于展示，失败不能阻断行情与策略快照发布。
+                    pass
                 self.progress('补齐历史与换月校正')
                 prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
                 self.progress('验证指标并发布快照');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))

@@ -61,13 +61,14 @@ def payload_schema_current(payload):
 def missing_holding(code):
     return dict(ts_code=code, holding_contract=None, holding_trade_date=None,
         holding_status='unavailable', holding_reason='该主力合约没有可用席位排名',
+        holding_failure_type='no_data',
         top20_long=None, top20_short=None, top20_net=None,
         top20_long_change=None, top20_short_change=None, top20_net_change=None,
         top20_long_concentration=None, top20_short_concentration=None,
         top_long_brokers=[], top_short_brokers=[])
 
 
-def load_holding_summaries(root, asof):
+def load_holding_summaries(root, asof, expected_contracts=None):
     path = Path(root)/f'processed/holding/{asof}.json'
     if not path.exists():
         return {}
@@ -77,8 +78,12 @@ def load_holding_summaries(root, asof):
         return {}
     if value.get('asof') != asof or not isinstance(value.get('records'), list):
         return {}
+    expected_contracts = expected_contracts or {}
     return {row['ts_code']: row for row in value['records']
-        if isinstance(row, dict) and row.get('ts_code')}
+        if isinstance(row, dict) and row.get('ts_code')
+        and row.get('holding_trade_date') == asof
+        and (not expected_contracts
+             or row.get('holding_contract') == expected_contracts.get(row['ts_code']))}
 
 
 def aggregate_curves(curves):
@@ -225,7 +230,9 @@ def build_payload(root, asof,phase_settings=None):
         technical_signals[code] = chart_signals(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]
-    holding_rows = load_holding_summaries(root, asof)
+    expected_holding_contracts = {
+        code: row.get('ts_code') for code, row in snapshot.items()}
+    holding_rows = load_holding_summaries(root, asof, expected_holding_contracts)
     phase_settings=phase_settings or PhaseSettings()
     phases={}
     for code,table in historical_panels(histories).items():

@@ -21,13 +21,28 @@ class DashboardTests(unittest.TestCase):
             path = root/'processed/holding/20260924.json'
             path.parent.mkdir(parents=True)
             record = dict(ts_code='M.DCE', holding_contract='M2701.DCE',
-                          holding_status='available')
+                          holding_trade_date='20260924', holding_status='available')
             path.write_text(json.dumps({'asof': '20260924', 'records': [record]}), encoding='utf-8')
-            rows = load_holding_summaries(root, '20260924')
+            rows = load_holding_summaries(root, '20260924', {'M.DCE': 'M2701.DCE'})
             self.assertEqual(rows['M.DCE']['holding_contract'], 'M2701.DCE')
             self.assertEqual(load_holding_summaries(root, '20260923'), {})
             path.write_text(json.dumps({'asof': '20260923', 'records': [record]}), encoding='utf-8')
             self.assertEqual(load_holding_summaries(root, '20260924'), {})
+
+    def test_holding_summaries_reject_stale_row_date_and_rolled_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/'processed/holding/20260924.json'
+            path.parent.mkdir(parents=True)
+            stale = dict(ts_code='M.DCE', holding_contract='M2701.DCE',
+                         holding_trade_date='20260923', holding_status='available')
+            path.write_text(json.dumps({'asof': '20260924', 'records': [stale]}), encoding='utf-8')
+            self.assertEqual(
+                load_holding_summaries(root, '20260924', {'M.DCE': 'M2701.DCE'}), {})
+            stale['holding_trade_date'] = '20260924'
+            path.write_text(json.dumps({'asof': '20260924', 'records': [stale]}), encoding='utf-8')
+            self.assertEqual(
+                load_holding_summaries(root, '20260924', {'M.DCE': 'M2705.DCE'}), {})
 
     def test_missing_holding_is_explicit_and_never_zero(self):
         value = missing_holding('I.DCE')

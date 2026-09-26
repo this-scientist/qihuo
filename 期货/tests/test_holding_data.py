@@ -128,6 +128,19 @@ class HoldingSummaryTests(unittest.TestCase):
                 with self.assertRaises(DataError):
                     validate_holding(frame, target())
 
+    def test_null_exchange_is_rejected(self):
+        frame = holding_frame()
+        frame.loc[0, 'exchange'] = None
+        with self.assertRaises(DataError):
+            validate_holding(frame, target())
+
+    def test_conflicting_duplicate_broker_rank_is_rejected(self):
+        frame = holding_frame()
+        duplicate = frame.iloc[[0]].copy()
+        duplicate.loc[:, 'long_hld'] = duplicate.long_hld + 1
+        with self.assertRaises(DataError):
+            validate_holding(pd.concat([frame, duplicate], ignore_index=True), target())
+
     def test_ine_accepts_shfe_route_but_not_unrelated_contract(self):
         frame = holding_frame(symbol='SC2611', exchange='SHFE')
         validated = validate_holding(
@@ -193,6 +206,34 @@ class HoldingCollectionTests(unittest.TestCase):
             self.assertEqual(payload['records'][1]['holding_status'], 'unavailable')
             quality = json.loads((root/f'quality/holding_{DATE}.json').read_text(encoding='utf-8'))
             self.assertEqual(quality['counts'], report['counts'])
+            self.assertEqual(report['failure_counts']['no_data'], 1)
+
+    def test_quality_report_distinguishes_validation_failures(self):
+        selected = pd.DataFrame([
+            dict(ts_code='M2701.DCE', main_code='M.DCE', role='main', exchange='DCE', oi=10000),
+            dict(ts_code='Y2701.DCE', main_code='Y.DCE', role='main', exchange='DCE', oi=10000),
+            dict(ts_code='P2701.DCE', main_code='P.DCE', role='main', exchange='DCE', oi=10000),
+            dict(ts_code='C2701.DCE', main_code='C.DCE', role='main', exchange='DCE', oi=10000),
+        ])
+        wrong_identity = holding_frame(symbol='Z2701')
+        row_limit = holding_frame(rows=2000, symbol='P2701')
+        invalid_numeric = holding_frame(symbol='C2701')
+        invalid_numeric['long_hld'] = invalid_numeric.long_hld.astype(object)
+        invalid_numeric.loc[0, 'long_hld'] = '坏数据'
+        collector = FakeCollector({
+            'M2701': pd.DataFrame(columns=holding_frame().columns),
+            'Y2701': wrong_identity,
+            'P2701': row_limit,
+            'C2701': invalid_numeric,
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            report = collect_main_holdings(collector, Path(tmp), selected, DATE)
+        self.assertEqual(report['failure_counts']['no_data'], 1)
+        self.assertEqual(report['failure_counts']['identity_mismatch'], 1)
+        self.assertEqual(report['failure_counts']['row_limit'], 1)
+        self.assertEqual(report['failure_counts']['numeric_validation'], 1)
+        self.assertEqual(report['counts']['unavailable'], 1)
+        self.assertEqual(report['counts']['invalid'], 3)
 
     def test_valid_cache_avoids_second_network_call(self):
         collector = FakeCollector({'M2701': holding_frame(), 'si2611': pd.DataFrame(columns=holding_frame().columns)})
@@ -214,6 +255,18 @@ class HoldingCollectionTests(unittest.TestCase):
             self.assertEqual(report['status'], 'unavailable')
             self.assertIn('selected', report['reason'])
             self.assertEqual(report['counts']['available'], 0)
+            self.assertTrue((root/f'quality/holding_{DATE}.json').exists())
+
+    def test_malformed_selected_file_returns_explicit_report(self):
+        collector = FakeCollector({})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/f'raw/selected/{DATE}.csv'
+            path.parent.mkdir(parents=True)
+            pd.DataFrame([{'main_code': 'M.DCE'}]).to_csv(path, index=False)
+            report = collect_update_holdings(collector, root, DATE)
+            self.assertEqual(report['status'], 'unavailable')
+            self.assertEqual(report['failure_counts']['input_validation'], 1)
             self.assertTrue((root/f'quality/holding_{DATE}.json').exists())
 
     def test_research_update_collects_holdings_after_main_contracts_publish(self):
@@ -249,6 +302,39 @@ class HoldingCollectionTests(unittest.TestCase):
 
         collect.assert_called_once_with(
             collector, store.root/'updates'/DATE, DATE, False)
+        self.assertEqual(store.job['status'], 'success')
+
+    def test_research_update_does_not_fail_when_holding_collection_fails(self):
+        with patch.dict(os.environ, {
+                'OAR_TUSHARE_TOKEN': 'test-token',
+                'OAR_TUSHARE_HTTP_URL': 'https://example.invalid'}):
+            import research_server
+            from trend_model import MODEL_VERSION
+
+        collector = object()
+        payload = dict(asof=DATE, quality={'success': True}, records=[], decisions=[],
+                       factors=[], model_version=MODEL_VERSION, phase_settings={})
+        store = research_server.ResearchStore.__new__(research_server.ResearchStore)
+        store.root = Path('test-root')
+        store.lock = threading.RLock()
+        store.job = {'status': 'queued'}
+        store.phase = object()
+        store.payloads = {}
+        store.option_cache = {}
+        store._persist_state = Mock()
+        store.copy_supplements = Mock()
+
+        with patch('fetch_futures_data.make_collector', return_value=collector), \
+                patch('focused.run_focused', return_value={
+                    'published_days': [DATE], 'partial_days': []}), \
+                patch('holding_data.collect_update_holdings', side_effect=RuntimeError('adapter bug')), \
+                patch('history.prepare_history'), \
+                patch('research_server.read_csv', return_value=pd.DataFrame()), \
+                patch('research_server.build_payload', return_value=payload), \
+                patch('research_server.publish_snapshot', return_value=payload), \
+                patch('research_server.mysql_cache_put', return_value=True):
+            store._worker('update', DATE, {'force': False})
+
         self.assertEqual(store.job['status'], 'success')
 
 

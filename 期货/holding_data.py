@@ -18,6 +18,18 @@ HOLDING_FIELDS = [
 ]
 HOLDING_VALUE_FIELDS = ['vol', 'long_hld', 'short_hld']
 HOLDING_CHANGE_FIELDS = ['vol_chg', 'long_chg', 'short_chg']
+HOLDING_FAILURE_TYPES = [
+    'no_data', 'identity_mismatch', 'row_limit', 'numeric_validation',
+    'duplicate_conflict', 'input_validation', 'api_error', 'cache_io',
+]
+
+
+class HoldingDataError(DataError):
+    """A rejected holding response with a stable quality-report category."""
+
+    def __init__(self, failure_type, message):
+        super().__init__(message)
+        self.failure_type = failure_type
 
 
 def holding_query(ts_code, exchange, trade_date=None):
@@ -28,7 +40,7 @@ def holding_query(ts_code, exchange, trade_date=None):
         native = re.fullmatch(r'([A-Za-z]+)(\d{3})', contract)
         match = standard or native
         if match is None:
-            raise DataError(f'Invalid CZCE holding contract: {ts_code}')
+            raise HoldingDataError('input_validation', f'Invalid CZCE holding contract: {ts_code}')
         symbol = f'{match.group(1).upper()}{match.group(2)}'
     return {
         'trade_date': trade_date,
@@ -63,39 +75,58 @@ def _broker_rows(rows, side):
 
 def validate_holding(frame, target):
     if frame.empty:
-        raise DataError('Holding ranking unavailable')
-    required(frame, HOLDING_FIELDS)
+        raise HoldingDataError('no_data', 'Holding ranking unavailable')
+    try:
+        required(frame, HOLDING_FIELDS)
+    except DataError as exc:
+        raise HoldingDataError('input_validation', str(exc)) from exc
     if len(frame) >= LIMITS['fut_holding']:
-        raise DataError('Holding ranking reached row limit')
+        raise HoldingDataError('row_limit', 'Holding ranking reached row limit')
     if not frame.trade_date.astype(str).eq(target['trade_date']).all():
-        raise DataError('Wrong holding trade_date')
+        raise HoldingDataError('identity_mismatch', 'Wrong holding trade_date')
     if not frame.symbol.astype(str).map(
             lambda value: symbol_matches(target['contract'], target['exchange'], value)).all():
-        raise DataError('Wrong holding contract')
+        raise HoldingDataError('identity_mismatch', 'Wrong holding contract')
     allowed = {'SHFE', 'INE'} if target['exchange'] == 'INE' else {target['exchange']}
-    if not set(frame.exchange.dropna().astype(str)).issubset(allowed):
-        raise DataError('Wrong holding exchange')
+    if frame.exchange.isna().any() or not set(frame.exchange.astype(str)).issubset(allowed):
+        raise HoldingDataError('identity_mismatch', 'Wrong holding exchange')
 
     clean = frame.copy()
     for field in HOLDING_VALUE_FIELDS + HOLDING_CHANGE_FIELDS:
         raw = clean[field]
         clean[field] = pd.to_numeric(raw, errors='coerce')
         if (raw.notna() & clean[field].isna()).any():
-            raise DataError(f'Invalid holding numeric value: {field}')
+            raise HoldingDataError('numeric_validation', f'Invalid holding numeric value: {field}')
         if not clean[field].dropna().map(lambda value: math.isfinite(float(value))).all():
-            raise DataError(f'Non-finite holding numeric value: {field}')
+            raise HoldingDataError('numeric_validation', f'Non-finite holding numeric value: {field}')
     if any((clean[field].dropna() < 0).any() for field in HOLDING_VALUE_FIELDS):
-        raise DataError('Negative holding rank value')
+        raise HoldingDataError('numeric_validation', 'Negative holding rank value')
+
+    clean['broker'] = clean.broker.map(
+        lambda value: str(value).strip() if pd.notna(value) else value)
+    duplicate_brokers = clean.loc[clean.broker.notna() & clean.broker.duplicated(False), 'broker'].unique()
+    for broker in duplicate_brokers:
+        rows = clean[clean.broker.eq(broker)]
+        if any(rows[field].nunique(dropna=True) > 1
+               for field in HOLDING_VALUE_FIELDS + HOLDING_CHANGE_FIELDS):
+            raise HoldingDataError(
+                'duplicate_conflict', f'Conflicting duplicate holding broker: {broker}')
+        first = rows.index[0]
+        for field in HOLDING_VALUE_FIELDS + HOLDING_CHANGE_FIELDS:
+            values = rows[field].dropna()
+            clean.loc[first, field] = values.iloc[0] if not values.empty else None
+        clean = clean.drop(rows.index[1:])
     return clean
 
 
-def unavailable_summary(target, status, reason):
+def unavailable_summary(target, status, reason, failure_type=None):
     return {
         'ts_code': target['ts_code'],
         'holding_contract': target['contract'],
         'holding_trade_date': target['trade_date'],
         'holding_status': status,
         'holding_reason': reason,
+        'holding_failure_type': failure_type,
         'top20_long': None,
         'top20_short': None,
         'top20_net': None,
@@ -118,7 +149,8 @@ def summarize_holding(frame, target, main_oi):
     long_rows = clean.dropna(subset=['long_hld']).nlargest(20, 'long_hld')
     short_rows = clean.dropna(subset=['short_hld']).nlargest(20, 'short_hld')
     if long_rows.empty or short_rows.empty:
-        return unavailable_summary(target, 'invalid', '席位多仓或空仓榜单缺失')
+        return unavailable_summary(
+            target, 'invalid', '席位多仓或空仓榜单缺失', 'numeric_validation')
 
     long_total = float(long_rows.long_hld.sum())
     short_total = float(short_rows.short_hld.sum())
@@ -147,7 +179,8 @@ def summarize_holding(frame, target, main_oi):
     )
     concentrations = [result['top20_long_concentration'], result['top20_short_concentration']]
     if any(value is not None and not 0 <= value <= 1 for value in concentrations):
-        return unavailable_summary(target, 'invalid', '席位集中度超出合理范围')
+        return unavailable_summary(
+            target, 'invalid', '席位集中度超出合理范围', 'numeric_validation')
     return result
 
 
@@ -194,6 +227,31 @@ def _status_counts(records):
             for status in statuses}
 
 
+def _failure_counts(records, extra=None):
+    counts = {failure_type: 0 for failure_type in HOLDING_FAILURE_TYPES}
+    for row in records:
+        failure_type = row.get('holding_failure_type')
+        if failure_type:
+            counts[failure_type] = counts.get(failure_type, 0) + 1
+    if extra:
+        counts[extra] = counts.get(extra, 0) + 1
+    return counts
+
+
+def holding_failure_report(root, trade_date, failure_type, reason):
+    report = {
+        'asof': trade_date,
+        'status': 'unavailable',
+        'reason': reason,
+        'counts': _status_counts([]),
+        'failure_counts': _failure_counts([], failure_type),
+        'records': [],
+        'finished_at': datetime.now().isoformat(),
+    }
+    atomic_json(report, Path(root)/f'quality/holding_{trade_date}.json')
+    return report
+
+
 def collect_main_holdings(collector, root, selected, trade_date, force=False):
     """Collect exact real-main contracts; contract failures become status rows."""
     root = Path(root)
@@ -204,18 +262,26 @@ def collect_main_holdings(collector, root, selected, trade_date, force=False):
     records = []
     for row in mains.itertuples(index=False):
         target = _holding_target(row, trade_date)
-        params = holding_query(target['contract'], target['exchange'], trade_date)
-        contract = target['contract'].split('.')[0]
-        path = root/f'raw/holding/{target["exchange"]}/{trade_date}/{contract}.csv'
-        frame = None if force else _cached_holding(path, params, target)
         try:
+            params = holding_query(target['contract'], target['exchange'], trade_date)
+            contract = target['contract'].split('.')[0]
+            path = root/f'raw/holding/{target["exchange"]}/{trade_date}/{contract}.csv'
+            frame = None if force else _cached_holding(path, params, target)
             if frame is None:
                 frame = collector.call('fut_holding', **params)
                 frame = validate_holding(frame, target)
                 _save_holding(frame, path, params)
             records.append(summarize_holding(frame, target, target['main_oi']))
+        except HoldingDataError as exc:
+            status = 'unavailable' if exc.failure_type == 'no_data' else 'invalid'
+            records.append(unavailable_summary(
+                target, status, str(exc), exc.failure_type))
         except DataError as exc:
-            records.append(unavailable_summary(target, 'unavailable', str(exc)))
+            records.append(unavailable_summary(
+                target, 'unavailable', str(exc), 'api_error'))
+        except (OSError, ValueError) as exc:
+            records.append(unavailable_summary(
+                target, 'unavailable', str(exc), 'cache_io'))
 
     counts = _status_counts(records)
     usable = counts['available'] + counts['numeric_only']
@@ -225,6 +291,7 @@ def collect_main_holdings(collector, root, selected, trade_date, force=False):
         'asof': trade_date,
         'status': status,
         'counts': counts,
+        'failure_counts': _failure_counts(records),
         'records': records,
         'finished_at': datetime.now().isoformat(),
     }
@@ -238,15 +305,13 @@ def collect_update_holdings(collector, root, trade_date, force=False):
     root = Path(root)
     selected_path = root/f'raw/selected/{trade_date}.csv'
     if selected_path.exists():
-        return collect_main_holdings(
-            collector, root, read_csv(selected_path), trade_date, force=force)
-    report = {
-        'asof': trade_date,
-        'status': 'unavailable',
-        'reason': f'selected contract snapshot unavailable: {selected_path}',
-        'counts': _status_counts([]),
-        'records': [],
-        'finished_at': datetime.now().isoformat(),
-    }
-    atomic_json(report, root/f'quality/holding_{trade_date}.json')
-    return report
+        try:
+            return collect_main_holdings(
+                collector, root, read_csv(selected_path), trade_date, force=force)
+        except (DataError, KeyError, TypeError, ValueError) as exc:
+            return holding_failure_report(root, trade_date, 'input_validation', str(exc))
+        except OSError as exc:
+            return holding_failure_report(root, trade_date, 'cache_io', str(exc))
+    return holding_failure_report(
+        root, trade_date, 'no_data',
+        f'selected contract snapshot unavailable: {selected_path}')
