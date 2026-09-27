@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from collector import DataError, required, unique
+from ema20_signal import Ema20Settings, ema20_assessment
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,9 @@ class Settings:
     startup_min: float = 65
     startup_hits: int = 6
     max_extension_atr: float = 3
+    ema_medium_slope_atr: float = .25
+    ema_strong_slope_atr: float = .75
+    ema_actionable_distance_atr: float = 2
     min_coverage: float = 90
 
     @classmethod
@@ -29,6 +33,8 @@ class Settings:
             raise ValueError('Invalid history/universe/top/hits settings')
         if not all(0 <= x <= 100 for x in [result.adx_min,result.startup_rps,result.trend_min,result.startup_min,result.min_coverage]) or result.max_extension_atr <= 0:
             raise ValueError('Invalid scoring thresholds')
+        if not 0 <= result.ema_medium_slope_atr <= result.ema_strong_slope_atr or not 0 < result.ema_actionable_distance_atr <= result.max_extension_atr:
+            raise ValueError('Invalid EMA20 thresholds')
         return result
 
 
@@ -63,17 +69,15 @@ def indicators(data):
             raise DataError(f'Invalid indicator price: {field}')
     c,h,l = df.close,df.high,df.low
     for n in [20,60,120]:
-        df[f'ma{n}']=c.rolling(n).mean()
         df[f'return{n}']=c/c.shift(n)-1
-        df[f'slope{n}']=df[f'ma{n}']/df[f'ma{n}'].shift(5)-1
     df['return1']=c/c.shift(1)-1
     df['return5']=c/c.shift(5)-1
-    df['trend_spread']=(df.ma20-df.ma120)/df.ma120
-    df['trend_spread_change5']=df.trend_spread-df.trend_spread.shift(5)
     tr=pd.concat([h-l,(h-c.shift()).abs(),(l-c.shift()).abs()],axis=1).max(axis=1)
     df['atr14']=wilder(tr)
-    df['ma_spread_atr']=(df.ma20-df.ma120)/df.atr14.replace(0,np.nan)
-    df['ma_spread_atr_change5']=df.ma_spread_atr-df.ma_spread_atr.shift(5)
+    df['ema20']=c.ewm(span=20,adjust=False).mean()
+    atr=df.atr14.replace(0,np.nan)
+    df['ema20_slope5_atr']=(df.ema20-df.ema20.shift(5))/atr
+    df['ema20_distance_atr']=(c-df.ema20)/atr
     up,down=h.diff(),-l.diff()
     plus=up.where((up>down)&(up>0),0.0)
     minus=down.where((down>up)&(down>0),0.0)
@@ -211,13 +215,11 @@ def evaluate(data, direction, context, settings):
     rps={n:row[f'rps{n}'] if d==1 else 100-row[f'rps{n}'] for n in [20,60,120]}
     rps_prev5=row.rps20_prev5 if d==1 else 100-row.rps20_prev5
     oriented=lambda a,b: d*(a-b)>0
-    cross=((data.ma20-data.ma60)*d>0)&((data.ma20.shift(1)-data.ma60.shift(1))*d<=0)
+    cross=((data.close-data.ema20)*d>0)&((data.close.shift(1)-data.ema20.shift(1))*d<=0)
     recent20=bool(data[f'break20_{side}'].tail(5).any())
     recent55=bool(data[f'break55_{side}'].tail(5).any())
     fresh_break=recent20 and int(data[f'break20_{side}'].iloc[-25:-5].sum())<=2
-    ma_parts=[(oriented(row.close,row.ma20),4),(oriented(row.ma20,row.ma60),5),
-        (oriented(row.ma60,row.ma120),5),(d*row.slope20>0,2),(d*row.slope60>0,2),(d*row.ma_spread_atr_change5>0,2)]
-    score_ma=sum(w for ok,w in ma_parts if ok)
+    score_ema20=(10 if d*row.ema20_distance_atr>0 else 0)+(10 if d*row.ema20_slope5_atr>=settings.ema_medium_slope_atr else 0)
     rps120_prev=row.rps120_prev5 if d==1 else 100-row.rps120_prev5
     score_rps=8*np.clip((rps[20]-50)/40,0,1)+7*np.clip((rps[60]-50)/30,0,1)+3*np.clip((rps[120]-50)/30,0,1)+2*(rps[120]>rps120_prev)
     score_breakout=6*recent20+10*recent55+4*fresh_break
@@ -233,11 +235,11 @@ def evaluate(data, direction, context, settings):
     basis=None
     if all(number(context.get(k)) is not None for k in ['spot_change5','basis_change5']):
         basis=5*(d*context['spot_change5']>0 and d*context['basis_change5']>0)
-    earned=score_ma+score_rps+score_breakout+score_quality+(funding or 0)+(structure or 0)+(basis or 0)
+    earned=score_ema20+score_rps+score_breakout+score_quality+(funding or 0)+(structure or 0)+(basis or 0)
     available=75+(15 if funding is not None else 0)+(5 if structure is not None else 0)+(5 if basis is not None else 0)
     prior_atr=data.atr_ratio.iloc[-25:-5]
     hits={
-        'ma_cross':bool(cross.tail(10).any()),
+        'price_ema20_cross':bool(cross.tail(10).any()),
         'rps_jump':bool(rps[20]>=settings.startup_rps and rps_prev5<settings.startup_rps and rps[20]-rps_prev5>=10),
         'rps_lead':bool(rps[20]-rps[120]>=15 and rps[120]<90),
         'base_breakout':bool(fresh_break),
@@ -247,16 +249,20 @@ def evaluate(data, direction, context, settings):
         'mild_volume':bool(1.2<=context['volume_ratio']<=3) if funding is not None else None,
         'curve_strength':bool(d*context['spread_change5']>0) if structure is not None else None,
     }
-    weights=dict(ma_cross=10,rps_jump=15,rps_lead=10,base_breakout=15,adx_rising=15,atr_expansion=15,oi_growth=10,mild_volume=5,curve_strength=5)
+    weights=dict(price_ema20_cross=10,rps_jump=15,rps_lead=10,base_breakout=15,adx_rising=15,atr_expansion=15,oi_growth=10,mild_volume=5,curve_strength=5)
     startup_earned=sum(weights[k] for k,v in hits.items() if v is True)
     startup_available=sum(weights[k] for k,v in hits.items() if v is not None)
     startup_score=startup_earned/startup_available*100
     trend_score=earned/available*100
     hit_count=sum(v is True for v in hits.values())
-    price_ok=oriented(row.close,row.ma20) and oriented(row.ma20,row.ma60) and d*row.slope20>0 and d*row.slope60>0
+    price_ok=d*row.ema20_distance_atr>=0 and d*row.ema20_slope5_atr>=settings.ema_medium_slope_atr
     quality_ok=row.adx>=settings.adx_min and di_ok
-    confirmed=bool(price_ok and oriented(row.ma60,row.ma120) and quality_ok and rps[20]>=80 and rps[60]>=65)
-    extension=d*(row.close-row.ma20)/row.atr14 if row.atr14>0 else float('inf')
+    confirmed=bool(price_ok and quality_ok and rps[20]>=80 and rps[60]>=65)
+    extension=d*row.ema20_distance_atr if pd.notna(row.ema20_distance_atr) else float('inf')
+    ema_settings=Ema20Settings(settings.ema_medium_slope_atr,settings.ema_strong_slope_atr,
+        settings.ema_actionable_distance_atr,settings.max_extension_atr)
+    ema=ema20_assessment(row,'long' if d==1 else 'short',quality_ok and rps[20]>=65,
+        'ADX/DI或RPS未达到必要门槛',ema_settings)
     startup_gate=bool(price_ok and quality_ok and rps[20]>=settings.startup_rps and recent20)
     eligible=bool(startup_gate and hit_count>=settings.startup_hits and startup_score>=settings.startup_min
         and trend_score>=settings.trend_min and extension<=settings.max_extension_atr
@@ -270,12 +276,13 @@ def evaluate(data, direction, context, settings):
         trend_score=round(trend_score,2),trend_coverage=available, startup_earned=startup_earned,
         startup_available=startup_available,startup_score=round(startup_score,2),startup_coverage=startup_available,
         startup_hits=hit_count,confirmed=confirmed,startup_eligible=eligible,state=state,
-        extension_atr=round(extension,3),score_ma=score_ma,score_rps=round(score_rps,2),score_breakout=score_breakout,
+        extension_atr=round(extension,3),score_ema20=score_ema20,score_rps=round(score_rps,2),score_breakout=score_breakout,
         score_quality=round(score_quality,2),score_funding=funding,score_structure=structure,score_basis=basis,
         missing_modules=';'.join(missing),overextended=bool(extension>settings.max_extension_atr),
         volatility_extreme=bool(row.atr_percentile>=95),oi_scope=context.get('oi_scope','unavailable'))
     result.update({f'directional_rps{n}':round(float(rps[n]),2) for n in [20,60,120]})
     result.update({f'signal_{k}':v for k,v in hits.items()})
+    result.update(ema)
     return result
 
 

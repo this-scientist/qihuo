@@ -40,8 +40,22 @@ class StrategyTests(unittest.TestCase):
         before = indicators(data.iloc[:280]).iloc[-1]
         data.loc[280:, ['high','low','open','close']] *= 4
         after = indicators(data).iloc[279]
-        for field in ['ma20','ma60','ma120','adx','atr14','high55','atr_percentile']:
+        for field in ['ema20','ema20_slope5_atr','ema20_distance_atr','adx','atr14','high55','atr_percentile']:
             self.assertEqual(before[field], after[field])
+
+    def test_only_ema20_is_published_and_uses_exponential_weighting(self):
+        data = bars([100] * 25 + [140] * 5)
+        result = indicators(data)
+        expected = data.close.ewm(span=20, adjust=False).mean()
+        self.assertAlmostEqual(result.ema20.iloc[-1], expected.iloc[-1])
+        self.assertNotAlmostEqual(result.ema20.iloc[-1], data.close.rolling(20).mean().iloc[-1])
+        self.assertAlmostEqual(result.ema20_slope5_atr.iloc[-1],
+                               (result.ema20.iloc[-1] - result.ema20.iloc[-6]) / result.atr14.iloc[-1])
+        self.assertAlmostEqual(result.ema20_distance_atr.iloc[-1],
+                               (result.close.iloc[-1] - result.ema20.iloc[-1]) / result.atr14.iloc[-1])
+        removed = {'ma20','ma60','ma120','slope20','slope60','slope120',
+                   'trend_spread','trend_spread_change5','ma_spread_atr','ma_spread_atr_change5'}
+        self.assertTrue(removed.isdisjoint(result.columns))
 
     def test_rps_extremes_and_ties(self):
         a = bars(np.linspace(100,200,300)); a['ts_code']='A.DCE'
@@ -101,7 +115,7 @@ class StrategyTests(unittest.TestCase):
         a=evaluate(long,1,context,Settings())
         b=evaluate(short,-1,dict(context,spread_change5=-5),Settings())
         self.assertTrue(a['confirmed'] and b['confirmed'])
-        self.assertEqual(a['score_ma'],b['score_ma'])
+        self.assertEqual(a['score_ema20'],b['score_ema20'])
         self.assertEqual(a['score_rps'],b['score_rps'])
         self.assertFalse(evaluate(long,-1,context,Settings())['confirmed'])
 
