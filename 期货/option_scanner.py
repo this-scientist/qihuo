@@ -28,7 +28,7 @@ DTE_BANDS = ((PREFERRED_DTE, ''),
     (OUTER_DTE, '期限放宽至7–120天（远月Gamma较低）'))
 SIGNAL_KEYS = ['rps_top', 'rps_rise', 'adx_turn', 'breakout', 'oi_up', 'volume_up',
     'inventory', 'term', 'iv_not_hot', 'liquidity_ok']
-EXTENSION_NOTE = '过度延伸=方向已确认但偏离MA20超过阈值（默认3ATR）：趋势仍强但追单风险高，重点观察回调介入或衰竭，不适合作为启动买点。'
+EXTENSION_NOTE = '过度延伸=方向已确认但偏离EMA20超过阈值（默认3ATR）：趋势仍强但追单风险高，重点观察回调介入或衰竭，不适合作为启动买点。'
 RADAR_NOTE = '反转雷达在方向扫描之外单独识别"原趋势内部先恶化→新趋势扩散确认"的品种：警报优先排列，其余按|RPS五日变化|排序。观察池，不构成方向建议；基差/库存未接入，期限确认仅用期货Carry。'
 STRUCTURE_NOTE = ('商品结构独立给出偏多/偏空：量价、现货基差、期限曲线、库存四组等权；月差与Carry合并为一组。'
     '偏多分减偏空分≥10为偏多，≤-10为偏空，其余中性。缺失组不参与，同时显示覆盖率。'

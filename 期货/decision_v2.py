@@ -3,6 +3,7 @@ from collections import defaultdict
 import math
 from trend_state import classify_trend_state
 from trend_model import MODEL_VERSION, price_trend, burst_index
+from ema20_signal import ema20_assessment
 
 
 DIR_GATE = 25
@@ -63,7 +64,7 @@ def side_strength(row):
     sign = _sign(row.get('direction'))
     if not sign:
         return 0.0
-    price_structure = _ratio_score(row.get('score_ma'), 20) * 35
+    price_structure = _ratio_score(row.get('score_ema20'), 20) * 35
     adx_di = _ratio_score(row.get('score_quality'), 15) * 25
     rps = _ratio_score(row.get('score_rps'), 20) * 20
     price_oi = _funding_strength(row, sign) * 20
@@ -163,7 +164,11 @@ def _candidate_tier(state, start):
     return 'WAIT'
 
 
-def _option_action(side, state, structure, trend_gate=None):
+def _option_action(side, state, structure, trend_gate=None, ema20_status=None):
+    if ema20_status in {'not_actionable', 'do_not_chase'}:
+        return '不做'
+    if ema20_status == 'wait_pullback':
+        return '等待'
     if trend_gate == 'BLOCK':
         return '不做'
     if state in {'WAIT', 'EXHAUST'} or structure == 'CONFLICT':
@@ -261,11 +266,21 @@ def build_decisions(records):
                                  if _finite(decision.get('rps20')) and _finite(decision.get('rps20_prev5')) else None)
         if model['status'] == 'ok':
             sign = _sign(side)
-            decision['extension_atr'] = sign * decision['ema20_distance_atr']
-            decision['overextended'] = decision['extension_atr'] > 3
+            quality_checks = [
+                (_num(decision.get('adx')) >= 20, 'ADX不足20'),
+                (sign * (_num(decision.get('plus_di'))-_num(decision.get('minus_di'))) > 0, 'DI方向未确认'),
+                (_num(decision.get('directional_rps20')) >= 65, '方向RPS20不足65'),
+            ]
+            quality_ok = all(ok for ok, _ in quality_checks)
+            quality_reason = '；'.join(reason for ok, reason in quality_checks if not ok)
+            decision.update(ema20_assessment(decision, side, quality_ok, quality_reason))
+            decision['extension_atr'] = decision['directional_ema20_distance_atr']
+            decision['overextended'] = decision['ema20_actionability'] == 'do_not_chase'
             decision['confirmed'] = abs(dir_score) >= 50 and _num(decision.get('adx')) >= 20
             decision['phase'] = ('震荡' if not sign else '过度延伸' if decision['overextended'] else
                                  '持续趋势' if decision['confirmed'] else '方向形成')
+        else:
+            decision.update(ema20_assessment(decision, 'neutral'))
         from option_scanner import structure_radar
         decision['structure_evidence'] = structure_radar(decision)
         decision['structure_direction'] = decision['structure_evidence']['dominant'] or ('neutral' if decision['structure_evidence']['coverage'] else 'unknown')
@@ -287,7 +302,8 @@ def build_decisions(records):
         decision['phase_reason'] = decision['trend_state_reason']
         decision['phase_age'] = None
         decision['candidate_tier'] = _candidate_tier(decision['state_v2'], decision['start_score'])
-        decision['option_action'] = _option_action(side, decision['state_v2'], decision['structure_confirm'], decision.get('trend_option_gate'))
+        decision['option_action'] = _option_action(side, decision['state_v2'], decision['structure_confirm'],
+                                                   decision.get('trend_option_gate'), decision.get('ema20_actionability'))
         decision['v2_active'] = decision['state_v2'] in {'START', 'TREND'}
         decision['v2_trade_allowed'] = decision['option_action'] in {'Call', 'Put'}
         decision['structure_support'] = decision['structure_confirm'] == 'SUPPORT'
@@ -311,7 +327,10 @@ def unify_records(records, decisions):
     fields = ['decision_side', 'decision_direction', 'trend_direction', 'trend_model',
               'dir_score', 'trend_state', 'trend_state_label', 'trend_state_reason',
               'structure_direction', 'structure_score', 'structure_confirm', 'structure_evidence',
-              'rps_accel', 'burst_score', 'burst_coverage', 'phase', 'phase_reason', 'phase_age', 'state_v2']
+              'rps_accel', 'burst_score', 'burst_coverage', 'phase', 'phase_reason', 'phase_age', 'state_v2',
+              'ema20_direction', 'ema20_strength', 'ema20_slope5_atr', 'ema20_distance_atr',
+              'directional_ema20_slope5_atr', 'directional_ema20_distance_atr',
+              'ema20_actionability', 'ema20_actionability_label', 'ema20_actionability_reasons']
     for row in records:
         decision = by_code.get(row['ts_code'])
         if decision:

@@ -102,6 +102,20 @@ class TrendStateTests(unittest.TestCase):
         self.assertEqual(result['trend_transition'], 'T4→T5')
         self.assertEqual(result['trend_option_gate'], 'BLOCK')
 
+    def test_ema20_actionability_is_the_primary_option_gate(self):
+        blocked = classify_trend_state(row(
+            ema20_actionability='not_actionable',
+            ema20_actionability_reasons=['EMA20趋势偏弱或与交易方向相反'],
+        ), 'long', 'TREND', 80)
+        waiting = classify_trend_state(row(
+            ema20_actionability='wait_pullback',
+            ema20_actionability_reasons=['价格顺方向偏离EMA20超过2 ATR'],
+            phase='持续趋势', confirmed=True,
+        ), 'long', 'TREND', 80)
+        self.assertEqual(blocked['trend_option_gate'], 'BLOCK')
+        self.assertTrue(blocked['trend_state_reason'].startswith('EMA20'))
+        self.assertEqual(waiting['trend_option_gate'], 'WATCH')
+
 
 if __name__ == '__main__':
     unittest.main()

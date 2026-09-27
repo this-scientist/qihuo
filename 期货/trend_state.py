@@ -141,8 +141,19 @@ def classify_trend_state(row: dict, side: str | None, state_v2: str | None, star
         and (adx_slope >= 4 or _truthy(row.get("signal_atr_expansion")) or _num(row.get("atr_change5")) > 8)
         and _oi_aligned(row, sign)
     )
+    ema_status = row.get('ema20_actionability')
+    ema_reasons = row.get('ema20_actionability_reasons') or []
 
-    if not sign or state_v2 == "WAIT" or (state_v2 is None and abs(_num(row.get("dir_score"))) < 20):
+    if ema_status == 'not_actionable':
+        state, transition, gate = "T0", "等待", "BLOCK"
+        reason = "EMA20不可做：" + "；".join(ema_reasons)
+    elif ema_status == 'do_not_chase':
+        state, transition, gate = "T5", "T4→T5", "BLOCK"
+        reason = "EMA20不可追：" + "；".join(ema_reasons)
+    elif ema_status == 'wait_pullback':
+        state, transition, gate = "T4", "等待回踩", "WATCH"
+        reason = "EMA20趋势有效但价格距离偏远：" + "；".join(ema_reasons)
+    elif not sign or state_v2 == "WAIT" or (state_v2 is None and abs(_num(row.get("dir_score"))) < 20):
         state, transition, gate = "T0", "等待", "BLOCK"
         reason = "多空方向优势不足，维持等待。"
     elif overextended or weakening:

@@ -51,8 +51,8 @@ def run(root, asof, out):
                         sides['without_'+omit] = price_trend(row, omit)['side']
                     ret = row['return20']
                     sides['momentum20'] = 'long' if ret > 0 else 'short' if ret < 0 else 'neutral'
-                    sides['ma20'] = ('long' if row['close'] > row['ma20'] and row['slope20'] > 0 else
-                                     'short' if row['close'] < row['ma20'] and row['slope20'] < 0 else 'neutral')
+                    sides['ema20'] = ('long' if row['ema20_distance_atr'] > 0 and row['ema20_slope5_atr'] >= .25 else
+                                      'short' if row['ema20_distance_atr'] < 0 and row['ema20_slope5_atr'] <= -.25 else 'neutral')
                     sides['rps20'] = 'long' if row['rps20'] >= 65 else 'short' if row['rps20'] <= 35 else 'neutral'
                     sides['rps5'] = 'long' if row['rps5'] >= 65 else 'short' if row['rps5'] <= 35 else 'neutral'
                     delta = row['rps20']-row['rps20_prev5']

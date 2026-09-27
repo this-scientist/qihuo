@@ -361,7 +361,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_one_passes_phase_context(self):
         record = strong_record('long'); record.update(phase='过度延伸', phase_match=True,
-            phase_age=9, phase_reason='方向已确认，偏离MA20 3.41 ATR', phase_extension_atr=3.41)
+            phase_age=9, phase_reason='方向已确认，偏离EMA20 3.41 ATR', phase_extension_atr=3.41)
         result = scan_one(record, 'long', self.chain)
         self.assertEqual(result['phase'], '过度延伸')
         self.assertTrue(result['phase_match'])
