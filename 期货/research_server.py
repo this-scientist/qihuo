@@ -128,7 +128,12 @@ def ai_context(store,asof,view,levels):
             组合信号=f"{cand.get('signals_met')}/{cand.get('signals_applicable')}",四重共振=cand.get('resonance'),
             方向RPS20=metrics.get('rps20'),RPS加速度=metrics.get('rps_accel'),ADX=metrics.get('adx'),
             ADX五日变化=metrics.get('adx_slope'),五日涨跌=metrics.get('return5'),OI五日变化=metrics.get('oi_change5'),
-            量比=metrics.get('volume_ratio'),ATR分位=metrics.get('atr_percentile'),偏离MA20_ATR=metrics.get('extension_atr')),
+            量比=metrics.get('volume_ratio'),ATR分位=metrics.get('atr_percentile'),
+            EMA20方向=decision.get('ema20_direction'),EMA20强弱=decision.get('ema20_strength'),
+            EMA20五日趋势_ATR=decision.get('ema20_slope5_atr'),
+            价格距EMA20_ATR=decision.get('directional_ema20_distance_atr'),
+            EMA20可做结论=decision.get('ema20_actionability_label'),
+            EMA20结论原因=decision.get('ema20_actionability_reasons')),
         商品结构=dict(结构方向=structure.get('dominant'),多头结构分=structure.get('long_score'),
             空头结构分=structure.get('short_score'),结构质量=structure.get('quality'),背离=structure.get('divergence'),
             覆盖维度=structure.get('coverage'),资金=structure.get('oi'),现货基差=structure.get('basis'),
@@ -355,7 +360,8 @@ class ResearchStore:
         frame=read_csv(path);frame=frame[frame.ts_code.eq(code)&frame.trade_date.le(asof)].sort_values('trade_date')
         if frame.empty or frame.trade_date.iloc[-1]!=asof:return dict(code=code,values=[],reason='真实标的历史不足或过期')
         if not frame.close.gt(0).all():raise DataError('真实标的价格无效')
-        moving={key:[float(value) if pd.notna(value) else None for value in frame.close.rolling(n).mean()] for key,n in [('ma20',20),('ma60',60)]}
+        moving={'ema20':[float(value) if pd.notna(value) else None
+                         for value in frame.close.ewm(span=20,adjust=False).mean()]}
         return dict(code=code,values=[[day,float(close)] for day,close in zip(frame.trade_date,frame.close)],moving=moving)
 
 def main():

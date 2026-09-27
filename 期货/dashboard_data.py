@@ -13,11 +13,10 @@ from decision_v2 import build_decisions, unify_records
 from trend_model import MODEL_VERSION
 from futures_signals import chart_signals, signal_for_history
 
-CHART_SCHEMA_VERSION = 2
-PAYLOAD_SCHEMA_VERSION = 2
+CHART_SCHEMA_VERSION = 3
+PAYLOAD_SCHEMA_VERSION = 3
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
-PERCENT_FIELDS = {'return1','return5','return20','return60','return120','slope20','slope60','slope120',
-    'trend_spread','trend_spread_change5','atr_change5','oi_change5','oi_change20',
+PERCENT_FIELDS = {'return1','return5','return20','return60','return120','atr_change5','oi_change5','oi_change20',
     'main_oi_change5','main_oi_change20','secondary_oi_change5','secondary_oi_change20',
     'rollover_absorption5','carry_annualized','carry_change5','carry_change20','spread_pct'}
 
@@ -48,6 +47,12 @@ def chart_candle(day, row):
         value = row.get(field)
         return round(float(value), 6) if value is not None and pd.notna(value) and math.isfinite(float(value)) else None
     return [day, *(finite(field) for field in ['open', 'high', 'low', 'close', 'vol', 'oi'])]
+
+
+def chart_moving(frame):
+    """Publish the sole chart overlay, reusing canonical EMA20 when available."""
+    values = frame['ema20'] if 'ema20' in frame else frame.close.ewm(span=20, adjust=False).mean()
+    return {'ema20': [round(float(value), 6) if pd.notna(value) else None for value in values]}
 
 
 def chart_schema_current(payload):
@@ -104,10 +109,11 @@ SECTOR_TREND_FLOOR = 0.15
 
 
 def sector_trend(values):
-    """大类方向：等权指数 MA20 相对五个交易日前的变化率（%）。"""
+    """大类方向：等权指数 EMA20 相对五个交易日前的变化率（%）。"""
     if len(values) < 26:
         return 'unknown', None
-    current, earlier = sum(values[-20:]) / 20, sum(values[-25:-5]) / 20
+    ema = pd.Series(values, dtype=float).ewm(span=20, adjust=False).mean()
+    current, earlier = ema.iloc[-1], ema.iloc[-6]
     if not earlier:
         return 'unknown', None
     slope = (current - earlier) / earlier * 100
@@ -161,12 +167,16 @@ def sector_relative_strength(groups, members):
 
 
 LABELS = {
-    'close':('复权收盘','价格 / 均线',''), 'raw_close':('真实主力收盘','价格 / 均线',''),
-    'ma20':('MA20','价格 / 均线',''), 'ma60':('MA60','价格 / 均线',''), 'ma120':('MA120','价格 / 均线',''),
-    'return20':('20日涨跌幅','价格 / 均线','%'), 'return60':('60日涨跌幅','价格 / 均线','%'), 'return120':('120日涨跌幅','价格 / 均线','%'),
-    'return5':('5日涨跌幅','价格 / 均线','%'),
-    'return1':('1日收盘涨跌幅','价格 / 均线','%'),
-    'day_change':('当日涨跌幅（昨结）','价格 / 均线','%'),
+    'close':('复权收盘','EMA20 / 价格',''), 'raw_close':('真实主力收盘','EMA20 / 价格',''),
+    'ema20':('EMA20','EMA20 / 价格',''),
+    'ema20_slope5_atr':('EMA20五日趋势强度','EMA20 / 价格','ATR'),
+    'ema20_distance_atr':('价格距EMA20','EMA20 / 价格','ATR'),
+    'directional_ema20_slope5_atr':('顺方向EMA20五日趋势强度','EMA20 / 价格','ATR'),
+    'directional_ema20_distance_atr':('顺方向价格距EMA20','EMA20 / 价格','ATR'),
+    'return20':('20日涨跌幅','价格 / 收益','%'), 'return60':('60日涨跌幅','价格 / 收益','%'), 'return120':('120日涨跌幅','价格 / 收益','%'),
+    'return5':('5日涨跌幅','价格 / 收益','%'),
+    'return1':('1日收盘涨跌幅','价格 / 收益','%'),
+    'day_change':('当日涨跌幅（昨结）','价格 / 收益','%'),
     'rps5':('RPS5','相对强弱',''),
     'rps_accel':('RPS20五日变化','相对强弱','百分点'),
     'pair_oi':('固定主次合计持仓','量仓 / 结构','手'),
@@ -174,9 +184,6 @@ LABELS = {
     'secondary_oi':('次主力持仓','量仓 / 结构','手'),
     'burst_score':('标的爆发指数','统一趋势','分'),
     'burst_coverage':('爆发因子覆盖率','统一趋势','%'),
-    'slope20':('MA20五日斜率','价格 / 均线','%'), 'slope60':('MA60五日斜率','价格 / 均线','%'), 'slope120':('MA120五日斜率','价格 / 均线','%'),
-    'trend_spread':('MA20 / MA120发散度','价格 / 均线','%'), 'trend_spread_change5':('发散度五日变化','价格 / 均线','百分点'),
-    'ma_spread_atr_change5':('均线ATR发散五日变化','价格 / 均线','ATR'),
     'rps20':('原始RPS20','相对强弱',''), 'rps60':('原始RPS60','相对强弱',''), 'rps120':('原始RPS120','相对强弱',''),
     'directional_rps20':('方向RPS20','相对强弱',''), 'directional_rps60':('方向RPS60','相对强弱',''), 'directional_rps120':('方向RPS120','相对强弱',''),
     'adx':('ADX14','趋势强度',''), 'adx_slope':('ADX五日变化','趋势强度','点'), 'plus_di':('+DI14','趋势强度',''), 'minus_di':('−DI14','趋势强度',''),
@@ -195,18 +202,18 @@ LABELS = {
     'curvature':('期限结构曲率（近+远-2×中）','量仓 / 结构',''),
     'basis_change5':('基差五日变化（未接入）','量仓 / 结构',''), 'spot_change5':('现货五日变化（未接入）','量仓 / 结构','%'),
     'trend_score':('原版趋势分','策略评分',''), 'startup_score':('原版启动分','策略评分',''), 'startup_hits':('启动信号命中数','策略评分','项'),
-    'trend_coverage':('趋势因子覆盖率','策略评分','%'), 'startup_coverage':('启动因子覆盖率','策略评分','%'), 'extension_atr':('顺方向偏离MA20','策略评分','ATR'),
+    'trend_coverage':('趋势因子覆盖率','策略评分','%'), 'startup_coverage':('启动因子覆盖率','策略评分','%'), 'extension_atr':('顺方向价格距EMA20','策略评分','ATR'),
     'confirmed':('原版趋势方向确认','策略评分',''), 'startup_eligible':('原版启动榜合格','策略评分',''),
     'dir_score':('DIR_SCORE','V2决策',''), 'start_score':('START_SCORE','V2决策',''),
     'price_rps':('Price RPS','V2决策',''), 'vol_rps':('VOL_RPS','V2决策',''), 'oi_change_rps':('ΔOI_RPS','V2决策',''),
     'v2_active':('V2活跃候选','V2决策',''), 'v2_trade_allowed':('V2允许期权表达','V2决策',''), 'structure_support':('商品结构支持','V2决策',''),
-    'signal_ma_cross':('近期均线交叉','启动信号',''), 'signal_rps_jump':('RPS跃升','启动信号',''), 'signal_rps_lead':('短期RPS领先长期','启动信号',''),
+    'signal_price_ema20_cross':('近期价格穿越EMA20','启动信号',''), 'signal_rps_jump':('RPS跃升','启动信号',''), 'signal_rps_lead':('短期RPS领先长期','启动信号',''),
     'signal_base_breakout':('近期基底突破','启动信号',''), 'signal_adx_rising':('ADX启动抬升','启动信号',''), 'signal_atr_expansion':('ATR压缩转扩张','启动信号',''),
     'signal_oi_growth':('固定月对OI增长','启动信号',''), 'signal_mild_volume':('温和放量','启动信号',''), 'signal_curve_strength':('月间结构同向强化','启动信号',''),
-    'score_ma':('均线模块分','模块评分','分'), 'score_rps':('RPS模块分','模块评分','分'), 'score_breakout':('突破模块分','模块评分','分'),
+    'score_ema20':('EMA20模块分','模块评分','分'), 'score_rps':('RPS模块分','模块评分','分'), 'score_breakout':('突破模块分','模块评分','分'),
     'score_quality':('趋势质量模块分','模块评分','分'), 'score_funding':('量仓模块分','模块评分','分'), 'score_structure':('月间结构模块分','模块评分','分'), 'score_basis':('基差模块分（未接入）','模块评分','分')}
 LABELS.update({'technical_start':('技术启动阶段','趋势阶段',''),'phase_match':('阶段方向与筛选方向一致','趋势阶段',''),
-    'phase_age':('当前阶段持续交易日','趋势阶段','日'),'phase_extension_atr':('当前趋势方向偏离MA20','趋势阶段','ATR'),
+    'phase_age':('当前阶段持续交易日','趋势阶段','日'),'phase_extension_atr':('当前趋势方向价格距EMA20','趋势阶段','ATR'),
     'commodity_oi_change5':('外部全品种OI五日变化','补充数据','%'),'commodity_oi_change20':('外部全品种OI二十日变化','补充数据','%')})
 LABELS.update({'sector_strength':('大类内相对强度','相对强弱',''),
     'sector_excess20':('相对大类等权超额20日','相对强弱','%')})
@@ -226,7 +233,7 @@ def build_payload(root, asof,phase_settings=None):
         shared = table.set_index('trade_date').loc[common]
         curves[code] = [[day, round(float(value),6)] for day,value in shared.close.items()]
         candles[code] = [chart_candle(day, row) for day,row in shared.iterrows()]
-        moving[code] = {key:[round(float(v),6) if pd.notna(v) else None for v in shared[key]] for key in ['ma20','ma60','ma120']}
+        moving[code] = chart_moving(shared)
         technical_signals[code] = chart_signals(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]

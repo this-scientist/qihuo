@@ -30,7 +30,10 @@ def build_fixtures(code='JM.DCE'):
     record = strong_record('long')
     record['ts_code'] = code
     payload = dict(asof='20260918', records=[record], decisions=[dict(ts_code=code,
-        trend_state_label='T2 趋势启动', state_v2='START', trend_option_gate='ALLOW')])
+        trend_state_label='T2 趋势启动', state_v2='START', trend_option_gate='ALLOW',
+        ema20_direction='rising', ema20_strength='strong', ema20_slope5_atr=.8,
+        directional_ema20_distance_atr=1.2, ema20_actionability_label='可做',
+        ema20_actionability_reasons=['EMA20方向、强度和价格距离均合格'])])
     chain = [option_row(strike, side, dte=20) for side in ['C', 'P'] for strike in range(92, 109, 4)]
     return payload, dict(records=chain)
 
@@ -72,6 +75,11 @@ class CandidateViewTests(unittest.TestCase):
             self.assertIn(key, context)
         self.assertEqual(context['技术面']['趋势状态'], 'T2 趋势启动')
         self.assertEqual(context['技术面']['生命周期'], 'START')
+        self.assertEqual(context['技术面']['EMA20方向'], 'rising')
+        self.assertEqual(context['技术面']['EMA20强弱'], 'strong')
+        self.assertEqual(context['技术面']['价格距EMA20_ATR'], 1.2)
+        self.assertEqual(context['技术面']['EMA20可做结论'], '可做')
+        self.assertNotIn('偏离MA20_ATR', context['技术面'])
         self.assertEqual(context['本地支撑压力位']['支撑'][0]['price'], 98.0)
         self.assertTrue(context['期权候选合约'], '应带上主仓/彩票仓候选合约')
         self.assertEqual(context['期权候选合约'][0]['档位'].startswith('主仓'), True)

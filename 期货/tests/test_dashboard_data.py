@@ -6,7 +6,7 @@ import pandas as pd
 from dashboard_data import (classify, aggregate_curves, public_metrics, sector_trend,
     sector_relative_strength, chart_candle, CHART_SCHEMA_VERSION, chart_schema_current,
     PAYLOAD_SCHEMA_VERSION, load_holding_summaries, missing_holding,
-    payload_schema_current)
+    payload_schema_current, LABELS, chart_moving)
 
 
 class DashboardTests(unittest.TestCase):
@@ -63,7 +63,23 @@ class DashboardTests(unittest.TestCase):
 
     def test_chart_schema_rejects_cached_payloads_without_volume_and_open_interest(self):
         self.assertFalse(chart_schema_current({'candles': {'RB.SHF': [['20260924', 1, 2, 0.5, 1.5]]}}))
+        self.assertFalse(chart_schema_current({'chart_schema_version': CHART_SCHEMA_VERSION - 1}))
         self.assertTrue(chart_schema_current({'chart_schema_version': CHART_SCHEMA_VERSION}))
+
+    def test_chart_and_factor_contract_are_ema20_only(self):
+        frame = pd.DataFrame({'close': [100, 110, 90, 120]})
+        moving = chart_moving(frame)
+        self.assertEqual(set(moving), {'ema20'})
+        expected = frame.close.ewm(span=20, adjust=False).mean().tolist()
+        self.assertEqual(moving['ema20'], [round(value, 6) for value in expected])
+        removed = {'ma20','ma60','ma120','slope20','slope60','slope120',
+                   'trend_spread','trend_spread_change5','ma_spread_atr_change5',
+                   'signal_ma_cross','score_ma'}
+        self.assertTrue(removed.isdisjoint(LABELS))
+        for key in ['ema20','ema20_slope5_atr','ema20_distance_atr',
+                    'directional_ema20_slope5_atr','directional_ema20_distance_atr',
+                    'signal_price_ema20_cross','score_ema20']:
+            self.assertIn(key, LABELS)
 
     def test_black_members_and_unique_classification(self):
         for code in ['RB.SHF','HC.SHF','I.DCE','J.DCE','JM.DCE','SF.ZCE','SM.ZCE']:
@@ -107,6 +123,13 @@ class SectorStrengthTests(unittest.TestCase):
         self.assertEqual(sector_trend(list(reversed(falling)))[0],'long')
         self.assertEqual(sector_trend([100.0]*26)[0],'flat')
         self.assertEqual(sector_trend([100,101])[0],'unknown')
+
+    def test_sector_trend_uses_ema20_slope(self):
+        values=[100.0]*20+[130,130,130,130,130,100]
+        ema=pd.Series(values).ewm(span=20,adjust=False).mean()
+        expected=(ema.iloc[-1]/ema.iloc[-6]-1)*100
+        _,slope=sector_trend(values)
+        self.assertAlmostEqual(slope,expected)
 
     def test_short_sector_scores_the_heaviest_faller_highest(self):
         group=group_of([100-index*0.5 for index in range(26)])
