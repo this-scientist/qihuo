@@ -1,6 +1,7 @@
 .venv/
 .trae/
 .worktrees/
+.superpowers/
 __pycache__/
 期货/data/
 期货/logs/
