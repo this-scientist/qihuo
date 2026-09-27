@@ -109,9 +109,9 @@ SCHEMA_SQL = [
       trend_direction VARCHAR(16),
       phase VARCHAR(40),
       close_adj DECIMAL(18,6),
-      ma20 DECIMAL(18,6),
-      ma60 DECIMAL(18,6),
-      ma120 DECIMAL(18,6),
+      ema20 DECIMAL(18,6),
+      ema20_slope5_atr DECIMAL(12,6),
+      ema20_distance_atr DECIMAL(12,6),
       return5 DECIMAL(12,6),
       return20 DECIMAL(12,6),
       rps20 DECIMAL(12,6),
@@ -258,6 +258,23 @@ MIGRATION_SQL = [
     "ALTER TABLE commodity_decision_daily ADD INDEX idx_decision_trend_state (trade_date, trend_state)",
 ]
 
+EMA20_METRIC_COLUMNS = {
+    'ema20': 'DECIMAL(18,6)',
+    'ema20_slope5_atr': 'DECIMAL(12,6)',
+    'ema20_distance_atr': 'DECIMAL(12,6)',
+}
+OBSOLETE_METRIC_COLUMNS = ('ma20', 'ma60', 'ma120')
+
+
+def metric_column_migrations(existing):
+    """Return exact, idempotent EMA20 column changes for commodity metrics."""
+    existing = set(existing)
+    sql = [f'ALTER TABLE commodity_metrics_daily ADD COLUMN `{name}` {definition}'
+           for name, definition in EMA20_METRIC_COLUMNS.items() if name not in existing]
+    sql.extend(f'ALTER TABLE commodity_metrics_daily DROP COLUMN `{name}`'
+               for name in OBSOLETE_METRIC_COLUMNS if name in existing)
+    return sql
+
 
 def ensure_database() -> None:
     cfg = mysql_config()
@@ -280,6 +297,13 @@ def ensure_schema() -> None:
     try:
         with conn.cursor() as cur:
             for sql in SCHEMA_SQL:
+                cur.execute(sql)
+            cur.execute(
+                "SELECT COLUMN_NAME AS name FROM information_schema.columns "
+                "WHERE table_schema=%s AND table_name='commodity_metrics_daily'",
+                (mysql_config()['database'],),
+            )
+            for sql in metric_column_migrations(row['name'] for row in cur.fetchall()):
                 cur.execute(sql)
             for sql in MIGRATION_SQL:
                 try:

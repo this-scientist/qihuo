@@ -5,13 +5,27 @@ import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from mysql_store import mysql_config
+from mysql_store import mysql_config, SCHEMA_SQL, metric_column_migrations
 from snapshot_store import publish_snapshot,read_snapshot,snapshot_source
 from research_server import ResearchStore,available_snapshots
 from dashboard_data import CHART_SCHEMA_VERSION, PAYLOAD_SCHEMA_VERSION
 from trend_model import MODEL_VERSION
 
 class PersistenceTests(unittest.TestCase):
+    def test_mysql_metric_schema_and_migration_are_ema20_only(self):
+        schema=next(sql for sql in SCHEMA_SQL if 'CREATE TABLE IF NOT EXISTS commodity_metrics_daily' in sql)
+        self.assertIn('ema20 DECIMAL',schema)
+        self.assertIn('ema20_slope5_atr DECIMAL',schema)
+        self.assertIn('ema20_distance_atr DECIMAL',schema)
+        for old in ['\n      ma20 DECIMAL','\n      ma60 DECIMAL','\n      ma120 DECIMAL']:
+            self.assertNotIn(old,schema)
+        legacy={'trade_date','commodity_code','ma20','ma60','ma120','payload_json'}
+        migration=metric_column_migrations(legacy)
+        self.assertEqual(sum(' ADD COLUMN ' in sql for sql in migration),3)
+        self.assertEqual(sum(' DROP COLUMN ' in sql for sql in migration),3)
+        current={'trade_date','commodity_code','ema20','ema20_slope5_atr','ema20_distance_atr','payload_json'}
+        self.assertEqual(metric_column_migrations(current),[])
+
     def test_snapshot_copies_holding_raw_summary_and_quality(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'working';(source/'quality').mkdir(parents=True)

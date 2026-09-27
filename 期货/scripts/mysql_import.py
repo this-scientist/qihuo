@@ -151,7 +151,7 @@ def import_payload(conn, payload: dict) -> dict[str, int]:
             cur,
             """
             REPLACE INTO commodity_metrics_daily
-              (trade_date, commodity_code, name, sector, trend_direction, phase, close_adj, ma20, ma60, ma120,
+              (trade_date, commodity_code, name, sector, trend_direction, phase, close_adj, ema20, ema20_slope5_atr, ema20_distance_atr,
                return5, return20, rps20, directional_rps20, adx, atr14, oi_change5, volume_ratio,
                carry_annualized, carry_change5, structure, payload_json)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -165,9 +165,9 @@ def import_payload(conn, payload: dict) -> dict[str, int]:
                     scalar(row, "trend_direction"),
                     scalar(row, "phase"),
                     scalar(row, "close"),
-                    scalar(row, "ma20"),
-                    scalar(row, "ma60"),
-                    scalar(row, "ma120"),
+                    scalar(row, "ema20"),
+                    scalar(row, "ema20_slope5_atr"),
+                    scalar(row, "ema20_distance_atr"),
                     scalar(row, "return5"),
                     scalar(row, "return20"),
                     scalar(row, "rps20"),
