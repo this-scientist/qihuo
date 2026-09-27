@@ -1,7 +1,7 @@
 """Price-only swing trend. Public inputs use percent, not fractional returns."""
 import math
 
-MODEL_VERSION = 'price-swing-v1'
+MODEL_VERSION = 'price-swing-v2-ema20'
 WEIGHTS = {'price': 40, 'momentum': 35, 'di': 25}
 
 
@@ -17,14 +17,14 @@ def clip(value, low=-1.0, high=1.0):
 
 
 def price_trend(row, omit=None):
-    fields = ['close', 'ma20', 'ma60', 'atr14', 'slope20', 'return5',
+    fields = ['close', 'ema20', 'atr14', 'ema20_distance_atr', 'ema20_slope5_atr', 'return5',
               'return20', 'plus_di', 'minus_di', 'adx']
-    if not all(finite(row.get(k)) for k in fields) or min(float(row[k]) for k in fields[:4]) <= 0:
+    if not all(finite(row.get(k)) for k in fields) or min(float(row[k]) for k in fields[:3]) <= 0:
         return dict(side='neutral', score=None, components={}, status='missing')
-    c, ma20, ma60, atr = (float(row[k]) for k in fields[:4])
+    c, ema20, atr = (float(row[k]) for k in fields[:3])
     # Correlated features share a fixed group budget; none gets an extra vote.
-    price = (clip((c-ma20)/(2*atr)) + clip((ma20-ma60)/(3*atr))
-             + clip(float(row['slope20'])*ma20/(100*atr))) / 3
+    price = (clip(float(row['ema20_distance_atr'])/2)
+             + clip(float(row['ema20_slope5_atr']))) / 2
     atr_pct = atr / c * 100
     momentum = (clip(float(row['return5'])/(atr_pct*math.sqrt(5)))
                 + clip(float(row['return20'])/(atr_pct*math.sqrt(20)))) / 2

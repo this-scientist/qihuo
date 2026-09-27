@@ -41,7 +41,7 @@ class UnifiedFactorsTests(unittest.TestCase):
 
     def test_price_direction_is_independent_of_relative_rank_and_oi(self):
         from trend_model import price_trend
-        row = dict(close=90, ma20=95, ma60=100, atr14=2, slope20=-2,
+        row = dict(close=90, ema20=95, atr14=2, ema20_distance_atr=-2.5, ema20_slope5_atr=-.8,
                    return5=-3, return20=-8, plus_di=10, minus_di=30, adx=30)
         result = price_trend(row)
         self.assertEqual(result['side'], 'short')
@@ -62,8 +62,9 @@ class UnifiedFactorsTests(unittest.TestCase):
     def test_legacy_cache_rebuilds_and_scanner_shares_conclusions(self):
         from research_server import ensure_decision_payload
         from option_scanner import build_scanner
-        row = dict(ts_code='X', close=90, ma20=95, ma60=100, atr14=2,
-                   slope20=-2, return5=-3, return20=-8, plus_di=10,
+        row = dict(ts_code='X', close=90, ema20=95, atr14=2,
+                   ema20_distance_atr=-2.5, ema20_slope5_atr=-.8,
+                   return5=-3, return20=-8, plus_di=10,
                    minus_di=30, adx=30, rps20=0, rps20_prev5=10,
                    carry_annualized=5, spread_change5=10, spread=20)
         records = [row | {'direction': side} for side in ['long', 'short']]

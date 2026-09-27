@@ -261,7 +261,7 @@ def build_decisions(records):
                                  if _finite(decision.get('rps20')) and _finite(decision.get('rps20_prev5')) else None)
         if model['status'] == 'ok':
             sign = _sign(side)
-            decision['extension_atr'] = sign * (decision['close']-decision['ma20'])/decision['atr14']
+            decision['extension_atr'] = sign * decision['ema20_distance_atr']
             decision['overextended'] = decision['extension_atr'] > 3
             decision['confirmed'] = abs(dir_score) >= 50 and _num(decision.get('adx')) >= 20
             decision['phase'] = ('震荡' if not sign else '过度延伸' if decision['overextended'] else

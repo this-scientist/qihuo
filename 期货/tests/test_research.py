@@ -6,21 +6,21 @@ from historical_validation import event_outcome
 
 class ResearchTests(unittest.TestCase):
     def row(self,**extra):
-        value=dict(close=130,ma20=120,ma60=110,ma120=115,slope20=.01,slope60=.01,adx=35,
+        value=dict(close=130,ema20=120,ema20_slope5_atr=.6,ema20_distance_atr=2,adx=35,
             plus_di=35,minus_di=10,rps20=95,rps60=85,atr14=5,adx_prev5=30,adx_slope=5,
             rps20_prev5=92,recent_break20=True,fresh_break=False)
         return value|extra
 
-    def test_strong_oil_is_not_range_when_long_ma_lags(self):
+    def test_strong_ema20_trend_is_sustained(self):
         result=phase_for_row(self.row())
-        self.assertEqual(result['phase'],'中短期强势')
+        self.assertEqual(result['phase'],'持续趋势')
         self.assertEqual(result['trend_direction'],'long')
 
-    def test_ethylene_glycol_does_not_need_new_breakout_to_be_trend(self):
-        self.assertEqual(phase_for_row(self.row(ma120=105,recent_break20=False))['phase'],'持续趋势')
+    def test_sustained_trend_does_not_need_new_breakout(self):
+        self.assertEqual(phase_for_row(self.row(recent_break20=False))['phase'],'持续趋势')
 
     def test_extension_does_not_cancel_direction(self):
-        result=phase_for_row(self.row(close=145))
+        result=phase_for_row(self.row(close=145,ema20_distance_atr=5))
         self.assertEqual(result['phase'],'过度延伸')
         self.assertEqual(result['trend_direction'],'long')
 
@@ -28,6 +28,12 @@ class ResearchTests(unittest.TestCase):
         row=self.row(adx=23,adx_prev5=18,adx_slope=5,rps20_prev5=70,fresh_break=True)
         self.assertEqual(phase_for_row(row)['phase'],'趋势启动')
         self.assertNotEqual(phase_for_row(row|{'fresh_break':False})['phase'],'趋势启动')
+
+    def test_weak_or_opposite_ema20_is_not_a_confirmed_trend(self):
+        weak=phase_for_row(self.row(ema20_slope5_atr=.2))
+        opposite=phase_for_row(self.row(ema20_slope5_atr=-.6))
+        self.assertNotEqual(weak['phase'],'持续趋势')
+        self.assertNotEqual(opposite['phase'],'持续趋势')
 
     def test_next_open_entry_no_same_close_execution(self):
         d=pd.DataFrame([dict(trade_date='20260908',open=90,close=100,high=101,low=89),
