@@ -7,6 +7,18 @@ test('chart accepts only the EMA20 overlay',()=>{
  assert.deepEqual(ema20ChartSeries({ma20:[1,2]}),[]);
 });
 
+test('chart rebuilds EMA20 from candles when a legacy payload has no EMA20',()=>{
+ const candles=[
+  ['20260901',10,11,9,10,100,200],
+  ['20260902',20,21,19,20,100,200],
+  ['20260903',30,31,29,30,100,200],
+ ];
+ const series=ema20ChartSeries({ma20:[11,12,13],ma60:[9,10,11]},candles);
+ assert.equal(series.length,1);
+ assert.equal(series[0].id,'ema20');
+ assert.deepEqual(series[0].values.map(value=>Number(value.toFixed(6))),[10,10.952381,12.76644]);
+});
+
 test('zoomRange zooms around the pointer anchor and keeps the newest bar in range',()=>{
  const zoomed=zoomRange({start:40,count:60,total:120},30,.5);
  assert.deepEqual(zoomed,{start:55,count:30});

@@ -29,8 +29,17 @@ export function priceFromPointer(pointerY,{top,height,low,high}){
  return high-ratio*(high-low);
 }
 
-export function ema20ChartSeries(moving={}){
- const values=moving?.ema20;
+export function ema20ChartSeries(moving={},candles=[]){
+ let values=moving?.ema20;
+ if(!Array.isArray(values)&&Array.isArray(candles)&&candles.length){
+  const alpha=2/21;let previous=null;
+  values=candles.map(row=>{
+   const close=Number(row?.[4]);
+   if(!Number.isFinite(close))return null;
+   previous=previous===null?close:alpha*close+(1-alpha)*previous;
+   return previous;
+  });
+ }
  return Array.isArray(values)?[{id:'ema20',label:'EMA20',values}]:[];
 }
 
@@ -104,7 +113,7 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
  let range={start:allRows.length-initialCount,count:initialCount},priceLevels=normalizePriceLevels(levels),pan=null;
  const surface=document.createElement('div'),svg=element('svg',{'class':'chart-svg kline-svg',role:'img','aria-label':title}),legend=document.createElement('div'),tip=document.createElement('div');
  surface.className='chart-surface kline-chart-surface';legend.className='chart-legend kline-legend';tip.className='chart-tooltip';tip.hidden=true;tip.setAttribute('role','tooltip');surface.append(svg,tip);container.append(surface,legend);
- const overlayDefinitions=ema20ChartSeries(moving).map((item,index)=>({...item,color:palette[(index+1)%palette.length]}));
+ const overlayDefinitions=ema20ChartSeries(moving,candles).map((item,index)=>({...item,color:palette[(index+1)%palette.length]}));
  overlayDefinitions.forEach(item=>{const button=document.createElement('button');button.type='button';button.setAttribute('aria-pressed','true');const swatch=document.createElement('span');swatch.className='swatch';swatch.style.borderColor=item.color;button.append(swatch,document.createTextNode(item.label));legend.appendChild(button)});
  for(const item of [{label:'成交量',color:'#9aa8ba',kind:'volume'},{label:'持仓量',color:'#a06b2c',kind:'oi'}]){
   const key=document.createElement('span');key.className='chart-key';key.dataset.kind=item.kind;const swatch=document.createElement('i');swatch.style.borderColor=item.color;key.append(swatch,document.createTextNode(item.label));legend.appendChild(key);
