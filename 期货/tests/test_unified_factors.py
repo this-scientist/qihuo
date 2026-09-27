@@ -26,7 +26,7 @@ class UnifiedFactorsTests(unittest.TestCase):
         result = build_decisions([dict(ts_code='X', direction='long')])[0]
         self.assertEqual(result['decision_side'], 'neutral')
         self.assertEqual(result.get('trend_model_status'), 'missing')
-        scored = build_decisions([dict(ts_code='X', direction='long', score_ma=20,
+        scored = build_decisions([dict(ts_code='X', direction='long', score_ema20=20,
                                        score_rps=20, score_quality=15)])[0]
         self.assertEqual(scored['decision_side'], 'neutral')
 
@@ -74,6 +74,16 @@ class UnifiedFactorsTests(unittest.TestCase):
         structure = build_scanner(payload, {'records':[]})['structure'][0]
         self.assertEqual(structure['trend_direction'], 'short')
         self.assertEqual(structure['dominant'], 'long')
+
+    def test_legacy_cache_drops_retired_factors(self):
+        from research_server import ensure_decision_payload
+        payload = ensure_decision_payload(dict(
+            records=[], decisions=[], model_version='price-swing-v2-ema20',
+            factors=[{'key': 'ma60', 'label': 'retired'},
+                     {'key': 'ema20', 'label': 'EMA20'}]))
+        keys = {item['key'] for item in payload['factors']}
+        self.assertIn('ema20', keys)
+        self.assertNotIn('ma60', keys)
 
     def test_volume_rank_ties_receive_identical_scores(self):
         records = [dict(ts_code=code, direction='long', volume_ratio=1, oi_change5=2)

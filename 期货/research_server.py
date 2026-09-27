@@ -182,7 +182,9 @@ def ensure_decision_payload(payload):
         unify_records(payload['records'], payload['decisions'])
         payload['model_version']=MODEL_VERSION
     payload['decision_summary']={state:sum(1 for row in payload['decisions'] if row.get('state_v2')==state) for state in ['WAIT','PREPARE','START','TREND','EXHAUST']}
-    factors=list(payload.get('factors',[]));existing={item.get('key') for item in factors}
+    # 旧快照可能仍携带已下线的因子；只允许当前白名单进入前端。
+    factors=[item for item in payload.get('factors',[]) if item.get('key') in LABELS]
+    existing={item.get('key') for item in factors}
     for key,value in LABELS.items():
         if key not in existing:
             factors.append(dict(key=key,label=value[0],group=value[1],unit=value[2],type='boolean' if key in BOOLEAN_FIELDS else 'number'))
