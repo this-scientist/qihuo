@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {zoomRange, normalizePriceLevels, priceFromPointer} from './charts.mjs';
+import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries} from './charts.mjs';
+
+test('chart accepts only the EMA20 overlay',()=>{
+ assert.deepEqual(ema20ChartSeries({ema20:[1,2],ma60:[3,4]}),[{id:'ema20',label:'EMA20',values:[1,2]}]);
+ assert.deepEqual(ema20ChartSeries({ma20:[1,2]}),[]);
+});
 
 test('zoomRange zooms around the pointer anchor and keeps the newest bar in range',()=>{
  const zoomed=zoomRange({start:40,count:60,total:120},30,.5);

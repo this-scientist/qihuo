@@ -1,7 +1,7 @@
 import {renderChart,renderCandlestickChart} from './charts.mjs';
 import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
-import {buildOpportunityRows,reminderDisplay} from './opportunity-workbench.mjs';
+import {buildOpportunityRows,ema20Summary,reminderDisplay} from './opportunity-workbench.mjs';
 import {renderHoldings} from './holdings.mjs';
 
 const $=id=>document.getElementById(id);
@@ -27,7 +27,7 @@ const OPTION_GATE_LABELS={ALLOW:'允许新仓',WATCH:'观察小仓',CONDITIONAL:
 const MONITOR_LABELS={HEALTHY:'正常持有',WEAKENING:'正在转弱',INVALID:'逻辑失效'};
 const STRUCTURE_LABELS={SUPPORT:'同向',CONFLICT:'背离',NEUTRAL:'中性',UNKNOWN:'数据不足',Backwardation:'近强远弱',Contango:'近弱远强',backwardation:'近强远弱',contango:'近弱远强',flat:'平坦'};
 const TERM_TIPS={
- dir:'价格趋势分 -100~100：价格/均线40、波动归一动量35、DI/ADX25。≥25偏多，≤-25偏空；规则分不是胜率。',
+ dir:'价格趋势分 -100~100：价格与EMA20关系40、波动归一动量35、DI/ADX25。≥25偏多，≤-25偏空；规则分不是胜率。',
  start:'启动分：衡量是否刚从准备区进入可交易启动状态。',
  rps:'相对强弱：本品种涨跌幅在全市场里的排名位置。',
  vol:'量能强度：成交量相对活跃程度，越高说明资金参与越明显。',
@@ -41,7 +41,7 @@ const TERM_TIPS={
  delta:'Delta：标的价格变动1元时，期权理论价格大约变化多少。',
  strike:'行权价：期权到期时可按该价格买入或卖出标的的价格。',
  adx:'趋势强度：衡量趋势是否有力度，不直接代表方向。',
- sector:'大类内相对强度 -100~100：先按大类等权指数的MA20五日斜率定大类方向，再用品种相对该大类的20日超额收益在类内排分位，并按大类方向翻转。与大类方向相反的品种取负（-100最强反向、+100最强顺势），所以整列从-100单调到+100。类内成员少于2个时分位无意义。',
+ sector:'大类内相对强度 -100~100：先按大类等权指数的EMA20五日斜率定大类方向，再用品种相对该大类的20日超额收益在类内排分位，并按大类方向翻转。与大类方向相反的品种取负（-100最强反向、+100最强顺势），所以整列从-100单调到+100。类内成员少于2个时分位无意义。',
  quote:'盘中最新价与买卖一档，来自新浪公开网页行情（非官方接口）。注意口径：这里的涨跌是「最新价 / 本交易日昨结算」，而左侧「当日%」是最近一个收盘日的涨跌，两者不是同一天，不要直接相减。报价只作盘中参考，不参与任何评分，也不改变收盘口径的决策与快照。',
  exec:'盘中可执行性 0~100 = 位置分×0.6 + 日线方向分×0.4。位置分看实时价落在「次日支撑~阻力」箱体的哪里：顺向近端（回调/反弹到位）90 分最优，刚破远端 75 分次之，区间中部 50，接近远端 35，逆势越界 30，反向破位 8。方向分按日线状态取值（START100/TREND85/PREPARE60/EXHAUST30/WAIT20）。按此列降序即实时排名；日线无方向的品种不参与排名。这是规则分，不是胜率，也未回测。'
 };
@@ -156,10 +156,13 @@ function statCards(){
   ${[['趋势偏多',strongLong,'up'],['趋势偏空',strongShort,'down'],['启动信号',start,''],['准备观察',prepare,''],['趋势 / 结构背离',today,'']].map(([label,value,cls])=>`<div class="metric-card"><span>${label}</span><strong class="${cls}">${value}</strong></div>`).join('')}
  </section>`;
 }
+function ema20Inline(row){const e=ema20Summary(row);return `<strong class="ema20-status ${e.tone}">${e.label}</strong><span class="contract">${e.direction}·${e.strength} / ${e.distance}</span>`}
+function ema20Assessment(row){const e=ema20Summary(row);return `<div class="ema20-assessment state-${e.status}"><div><span>EMA20判断</span><strong>${e.label}</strong></div><div><span>方向 / 强弱</span><strong>${e.direction} / ${e.strength}</strong></div><div><span>五日趋势</span><strong>${e.slope}</strong></div><div><span>当前距离</span><strong>${e.distance}</strong></div><p>${escapeHtml((row.ema20_actionability_reasons||[]).join('；')||e.reason)}</p></div>`}
 function decisionTable(source,limit=80,compact=false){
  const body=sortedRows(source).slice(0,limit).map(row=>`<tr data-code="${codeOf(row)}">
   <td><strong>${row.name}</strong><span class="contract">${row.main_code||codeOf(row)}</span></td>
   <td class="${directionClass(row)}">${directionText(row.decision_side)}</td>
+  <td>${ema20Inline(row)}</td>
   <td class="${row.structure_direction==='long'?'up':row.structure_direction==='short'?'down':'muted'}">${directionText(row.structure_direction)}<span class="contract">${structureText(row.structure_confirm)}</span></td>
   <td class="${tone(row.day_change)}">${pct(row.day_change)}</td>
   ${quoteCell(row)}
@@ -181,7 +184,7 @@ function decisionTable(source,limit=80,compact=false){
   <td>${signed(row.structure_score)}<span class="contract">覆盖 ${fmt(row.structure_evidence?.group_coverage)}%</span></td>
   <td><button class="mini-action" data-action="options" data-code="${codeOf(row)}">T型</button></td>
  </tr>`).join('');
- return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>结构方向</th><th>${term('当日%','day')}</th><th>${term('实时价','quote')}</th><th>${term('可执行性','exec')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('大类内强度','sector')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="24" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
+ return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>EMA20判断</th><th>结构方向</th><th>${term('当日%','day')}</th><th>${term('实时价','quote')}</th><th>${term('可执行性','exec')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('大类内强度','sector')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="25" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
 }
 function filteredRows(){return rows().filter(row=>(state.sector==='all'||row.sector===state.sector)&&(state.side==='all'||row.decision_side===state.side)&&(state.stage==='all'||row.state_v2===state.stage)&&`${row.name} ${row.ts_code} ${row.main_code}`.toLowerCase().includes(state.search.toLowerCase()))}
 const QUEUE_META={
@@ -197,6 +200,7 @@ function opportunityCard(item){
  return `<article class="opportunity-card queue-${item.queue}" data-code="${item.code}">
   <header><div><strong>${item.name}</strong><span>${item.mainCode} · ${item.sector}</span></div><em class="${sideClass}">${directionText(item.side)} · ${stateText(item.state)}</em></header>
   <p class="opportunity-action">${item.action}</p>
+  <div class="ema20-card-strip"><strong class="${item.ema20.tone}">${item.ema20.label}</strong><span>EMA20 ${item.ema20.direction}·${item.ema20.strength}</span><em>${item.ema20.distance}</em></div>
   <ul>${(item.reasons.length?item.reasons:['暂无足够证据']).map(reason=>`<li>${reason}</li>`).join('')}</ul>
   <div class="opportunity-risk" title="${escapeHtml(reminder.full)}"><span>提醒</span><div class="opportunity-risk-reasons">${reminder.visible.map(reason=>`<p>${escapeHtml(reason)}</p>`).join('')}${reminder.hiddenCount?`<small>另有 ${reminder.hiddenCount} 项，悬浮查看全部</small>`:''}</div></div>
   <footer><button class="mini-action" data-code="${item.code}" data-action="detail">详情</button><button class="mini-action" data-code="${item.code}" data-action="options">T型</button></footer>
@@ -221,14 +225,15 @@ function renderCandidates(){
  app.innerHTML=header()+`<section class="decision-panel"><div class="candidate-tabs">${tabs.map(tab=>`<button data-candidate-tab="${tab}" class="${state.candidateTab===tab?'active':''}">${stateText(tab)}<span>${rows().filter(row=>row.state_v2===tab).length}</span></button>`).join('')}</div>${decisionTable(source)}</section>`;
 }
 function metricBlocks(row){
- const items=[['趋势方向',directionText(row.decision_side)],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
+ const ema=ema20Summary(row);
+ const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}<div class="quote-metrics" data-intraday="${contractOf(row)}">${quoteMetrics(row)}${execMetrics(row)}</div></div>`;
 }
 function renderDetail(){
  const row=selectedRow();
  if(!row){app.innerHTML=header()+'<p class="empty">当前日期暂无商品数据</p>';return}
  app.innerHTML=header()+`<section class="detail-layout">
-  <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / 均线',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
+  <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${ema20Assessment(row)}${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / EMA20',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
   <article class="decision-panel chart-card"><div class="section-heading"><div><h2>日线K线、量仓与关键价位</h2><div class="muted small">点击图表放大 · 红色压力 · 绿色支撑</div></div><button type="button" data-open-kline>放大查看</button></div><div id="single-chart" class="chart-preview" data-open-kline role="button" tabindex="0" aria-label="放大查看可缩放K线图"></div></article>
   <article class="decision-panel"><h2>量仓</h2><div class="structure-grid">${[['主力OI（手）',count(row.main_oi)],['次主力OI（手）',count(row.secondary_oi)],['主次合计OI（手）',count(row.pair_oi)],['固定月对OI 5日',pct(row.oi_change5)],['固定月对OI 20日',pct(row.oi_change20)],['成交量比',fmt(row.volume_ratio)],['量价表现',row.structure_evidence?.oi?.state],['移仓迹象',row.rollover_transfer?'有':row.rollover_transfer===false?'无':'缺失']].map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div>${renderHoldings(row.trader_positions)}</article>
   <article class="decision-panel"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>

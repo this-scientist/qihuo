@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildOpportunityRows, commodityReminderReasons, optionExpressionStatus, reminderDisplay} from './opportunity-workbench.mjs';
+import {buildOpportunityRows, commodityReminderReasons, ema20Summary, optionExpressionStatus, reminderDisplay} from './opportunity-workbench.mjs';
 
 const base = overrides => ({
   ts_code: 'JM.DCE',
@@ -18,6 +18,13 @@ const base = overrides => ({
   oi_change5: 3,
   volume_ratio: 1.5,
   extension_atr: 1.2,
+  ema20_direction: 'rising',
+  ema20_strength: 'strong',
+  ema20_slope5_atr: .8,
+  directional_ema20_distance_atr: 1.2,
+  ema20_actionability: 'actionable',
+  ema20_actionability_label: '可做',
+  ema20_actionability_reasons: ['EMA20方向、强度和价格距离均合格'],
   today_support: 95,
   today_resistance: 110,
   ...overrides,
@@ -44,6 +51,9 @@ const option = overrides => ({
 });
 
 assert.equal(optionExpressionStatus(base(), [option()]).status, 'usable');
+assert.deepEqual(ema20Summary(base()), {
+  status:'actionable',label:'可做',tone:'up',direction:'上行',strength:'强',slope:'+0.80 ATR / 5日',distance:'+1.20 ATR',reason:'EMA20方向、强度和价格距离均合格',
+});
 assert.equal(optionExpressionStatus(base(), []).status, 'missing');
 assert.equal(
   optionExpressionStatus(base(), [option({tradability: {...option().tradability, counter_trend: true}})]).status,
@@ -103,6 +113,14 @@ assert.equal(rows.focus[0].code, 'A.DCE');
 assert.equal(rows.wait[0].code, 'B.DCE');
 assert.equal(rows.watch[0].code, 'C.DCE');
 assert.deepEqual(rows.avoid.map(row => row.code), ['D.DCE', 'E.DCE']);
+
+const emaQueues=buildOpportunityRows({records:[
+ base({ts_code:'F.DCE',ema20_actionability:'wait_pullback',ema20_actionability_label:'等待回踩'}),
+ base({ts_code:'G.DCE',ema20_actionability:'do_not_chase',ema20_actionability_label:'不可追'}),
+ base({ts_code:'H.DCE',ema20_actionability:'not_actionable',ema20_actionability_label:'不可做'}),
+]});
+assert.deepEqual(emaQueues.wait.map(row=>row.code),['F.DCE','G.DCE']);
+assert.deepEqual(emaQueues.avoid.map(row=>row.code),['H.DCE']);
 
 assert.deepEqual(commodityReminderReasons(base()), ['失效关注：跌破今日支撑95.00']);
 assert.deepEqual(commodityReminderReasons(base({

@@ -29,6 +29,11 @@ export function priceFromPointer(pointerY,{top,height,low,high}){
  return high-ratio*(high-low);
 }
 
+export function ema20ChartSeries(moving={}){
+ const values=moving?.ema20;
+ return Array.isArray(values)?[{id:'ema20',label:'EMA20',values}]:[];
+}
+
 export function renderChart(container,input,{window=60,price=false,priceLabel='复权价格',title='走势对比'}={}){
  observers.get(container)?.disconnect();container.replaceChildren();
  const series=input.map((item,index)=>{
@@ -99,8 +104,8 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
  let range={start:allRows.length-initialCount,count:initialCount},priceLevels=normalizePriceLevels(levels),pan=null;
  const surface=document.createElement('div'),svg=element('svg',{'class':'chart-svg kline-svg',role:'img','aria-label':title}),legend=document.createElement('div'),tip=document.createElement('div');
  surface.className='chart-surface kline-chart-surface';legend.className='chart-legend kline-legend';tip.className='chart-tooltip';tip.hidden=true;tip.setAttribute('role','tooltip');surface.append(svg,tip);container.append(surface,legend);
- const maDefinitions=Object.entries(moving).filter(([,values])=>Array.isArray(values)).map(([key,values],index)=>({id:key,label:key.toUpperCase(),color:palette[(index+1)%palette.length],values}));
- maDefinitions.forEach(item=>{const button=document.createElement('button');button.type='button';button.setAttribute('aria-pressed','true');const swatch=document.createElement('span');swatch.className='swatch';swatch.style.borderColor=item.color;button.append(swatch,document.createTextNode(item.label));legend.appendChild(button)});
+ const overlayDefinitions=ema20ChartSeries(moving).map((item,index)=>({...item,color:palette[(index+1)%palette.length]}));
+ overlayDefinitions.forEach(item=>{const button=document.createElement('button');button.type='button';button.setAttribute('aria-pressed','true');const swatch=document.createElement('span');swatch.className='swatch';swatch.style.borderColor=item.color;button.append(swatch,document.createTextNode(item.label));legend.appendChild(button)});
  for(const item of [{label:'成交量',color:'#9aa8ba',kind:'volume'},{label:'持仓量',color:'#a06b2c',kind:'oi'}]){
   const key=document.createElement('span');key.className='chart-key';key.dataset.kind=item.kind;const swatch=document.createElement('i');swatch.style.borderColor=item.color;key.append(swatch,document.createTextNode(item.label));legend.appendChild(key);
  }
@@ -129,21 +134,21 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   lastLayout={width,plotW,left};
   for(const level of priceLevels){const item=legend.querySelector(`[data-level-legend="${level.id}"]`);if(item)item.lastChild.textContent=`${level.label} ${level.value.toFixed(2)}`}
   const visibleDates=new Set(rows.map(row=>row[0])),visibleSignals=signals.filter(signal=>visibleDates.has(signal.trade_date));
-  const maSeries=maDefinitions.map(item=>({...item,values:item.values.slice(range.start,range.start+range.count)}));
-  const basePrices=rows.flatMap(row=>[row[2],row[3]]).concat(maSeries.flatMap(item=>item.values.filter(Number.isFinite))).concat(visibleSignals.map(s=>s.close).filter(Number.isFinite));
+  const overlaySeries=overlayDefinitions.map(item=>({...item,values:item.values.slice(range.start,range.start+range.count)}));
+  const basePrices=rows.flatMap(row=>[row[2],row[3]]).concat(overlaySeries.flatMap(item=>item.values.filter(Number.isFinite))).concat(visibleSignals.map(s=>s.close).filter(Number.isFinite));
   const rawLow=Math.min(...basePrices),rawHigh=Math.max(...basePrices),rawSpan=Math.max(rawHigh-rawLow,1);
   const nearbyLevels=priceLevels.map(level=>level.value).filter(value=>value>=rawLow-rawSpan*.2&&value<=rawHigh+rawSpan*.2);
   const minY=Math.min(...basePrices,...nearbyLevels),maxY=Math.max(...basePrices,...nearbyLevels),pad=Math.max((maxY-minY)*.08,1),lo=minY-pad,hi=maxY+pad;
   const x=index=>left+plotW*(index+.5)/rows.length,y=value=>top+3+(hi-value)/(hi-lo)*(plotH-6),bodyW=Math.max(2,Math.min(13,plotW/rows.length*.58));
   svg.append(element('rect',{'data-chart-frame':'price',x:left,y:top,width:plotW,height:plotH,fill:'none',stroke:'#e2e7ee'}));
   for(let i=0;i<5;i++){const value=lo+(hi-lo)*i/4,py=y(value);svg.append(element('line',{x1:left,y1:py,x2:width-right,y2:py,stroke:'#edf0f5'}));svg.append(element('text',{x:left-8,y:py+4,'text-anchor':'end'},value.toFixed(0)))}
-  svg.append(element('text',{x:left,y:13,'class':'axis-title'},'复权K线 / 均线'));
+  svg.append(element('text',{x:left,y:13,'class':'axis-title'},'复权K线 / EMA20'));
   rows.forEach((row,index)=>{
    const [,open,high,low,close]=row,px=x(index),up=close>=open,color=up?'#cb524a':'#24846b';
    svg.append(element('line',{'data-candle-wick':'',x1:px,y1:y(high),x2:px,y2:y(low),stroke:color,'stroke-width':1.2}));
    svg.append(element('rect',{'data-candle':'',x:px-bodyW/2,y:Math.min(y(open),y(close)),width:bodyW,height:Math.max(1,Math.abs(y(open)-y(close))),fill:up?'#fff1ef':'#e8f6f1',stroke:color,'stroke-width':1.2}));
   });
-  maSeries.forEach(item=>{
+  overlaySeries.forEach(item=>{
    const points=item.values.map((value,index)=>Number.isFinite(value)?[index,value]:null).filter(Boolean);
    if(points.length>1)svg.append(element('path',{'data-series':item.id,d:points.map(([index,value],i)=>`${i?'L':'M'}${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(' '),fill:'none',stroke:item.color,'stroke-width':1.7}));
   });

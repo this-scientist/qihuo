@@ -9,6 +9,18 @@ const optionSideFor = side => side === 'long' ? 'C' : side === 'short' ? 'P' : n
 const signed = value => finite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}` : null;
 const truthy = value => value === true || String(value).toLowerCase() === 'true';
 
+export function ema20Summary(record){
+  const direction={rising:'上行',falling:'下行',flat:'走平',unavailable:'数据不足'}[record?.ema20_direction]||'数据不足';
+  const strength={strong:'强',medium:'中',weak:'弱',unavailable:'数据不足'}[record?.ema20_strength]||'数据不足';
+  const status=record?.ema20_actionability||'not_actionable';
+  const label=record?.ema20_actionability_label||{actionable:'可做',wait_pullback:'等待回踩',do_not_chase:'不可追',not_actionable:'不可做'}[status]||'不可做';
+  const format=value=>finite(value)?`${value>=0?'+':''}${value.toFixed(2)} ATR`:'—';
+  return {status,label,tone:status==='actionable'?'up':status==='not_actionable'||status==='do_not_chase'?'down':'watch',
+    direction,strength,slope:finite(record?.ema20_slope5_atr)?`${format(record.ema20_slope5_atr)} / 5日`:'—',
+    distance:format(record?.directional_ema20_distance_atr),
+    reason:(record?.ema20_actionability_reasons||[])[0]||'EMA20数据不足'};
+}
+
 export function optionExpressionStatus(record, optionRows = []){
   const desiredSide = optionSideFor(sideOf(record));
   if(!desiredSide)return {status: 'missing', label: '期权方向缺失', best: null, risk: '标的方向不明确'};
@@ -53,6 +65,8 @@ export function optionExpressionStatus(record, optionRows = []){
 
 function reasonList(record, executionItem){
   const reasons = [];
+  const ema=ema20Summary(record);
+  reasons.push(`EMA20 ${ema.direction}·${ema.strength}，距离 ${ema.distance}`);
   if(record.trend_state_label)reasons.push(record.trend_state_label);
   else if(record.state_v2)reasons.push(record.state_v2);
   if(record.structure_confirm === 'SUPPORT')reasons.push('商品结构同向支持');
@@ -66,9 +80,10 @@ function reasonList(record, executionItem){
 
 export function commodityReminderReasons(record, executionItem){
   const reasons = [];
+  if(record.ema20_actionability && record.ema20_actionability!=='actionable')reasons.push(...(record.ema20_actionability_reasons||[ema20Summary(record).label]));
   if(record.state_v2 === 'EXHAUST')reasons.push('趋势进入衰竭或过度延伸区');
   if(record.structure_confirm === 'CONFLICT')reasons.push('商品结构与价格趋势背离');
-  if(finite(record.extension_atr) && record.extension_atr > 3)reasons.push(`偏离MA20达到${record.extension_atr.toFixed(1)}ATR，追单风险高`);
+  if(finite(record.directional_ema20_distance_atr) && record.directional_ema20_distance_atr > 3)reasons.push(`价格距EMA20达到${record.directional_ema20_distance_atr.toFixed(1)} ATR，追单风险高`);
   if(finite(executionItem?.exec_score) && executionItem.exec_score < 50)reasons.push(`盘中可执行性${executionItem.exec_score}，当前位置不足50`);
 
   if(['WAIT','PREPARE'].includes(record.state_v2)){
@@ -102,6 +117,8 @@ export function reminderDisplay(reasons, limit=2){
 
 function queueFor(record, executionItem){
   const state = record.state_v2;
+  if(record.ema20_actionability==='not_actionable')return 'avoid';
+  if(['wait_pullback','do_not_chase'].includes(record.ema20_actionability))return 'wait';
   if(state === 'EXHAUST' || record.structure_confirm === 'CONFLICT')return 'avoid';
   if((finite(record.extension_atr) && record.extension_atr > 3) || (executionItem?.exec_score != null && executionItem.exec_score < 50))return 'wait';
   if(state === 'START' || state === 'TREND')return 'focus';
@@ -152,6 +169,7 @@ export function buildOpportunityRows(data, execution = {}){
       riskReasons,
       execution: executionItem,
       record,
+      ema20: ema20Summary(record),
       queue,
     };
     groups[queue].push(row);
