@@ -50,6 +50,27 @@ export function ema20ChartSeries(moving={},candles=[]){
  return Array.isArray(values)?[{id:'ema20',label:'EMA20',values}]:[];
 }
 
+// 连续未触碰 EMA20 的同向K线区间：上涨要求每根最低价都在均线上方，下跌要求每根最高价都在均线下方；
+// 影线触及/穿越均线、均线缺失或方向切换都会中断。只保留根数大于 minBars 的区间。
+export function ema20GapRuns(candles=[],emaValues=[],{minBars=20}={}){
+ const runs=[];let run=null;
+ const flush=end=>{
+  if(run&&end-run.start+1>minBars)runs.push({start:run.start,end,side:run.side,count:end-run.start+1});
+  run=null;
+ };
+ for(let i=0;i<candles.length;i++){
+  const row=candles[i],ema=emaValues?.[i];let side=null;
+  if(Array.isArray(row)&&Number.isFinite(ema)&&Number.isFinite(row[2])&&Number.isFinite(row[3])){
+   if(row[3]>ema)side='up';else if(row[2]<ema)side='down';
+  }
+  if(side&&run?.side===side)continue;
+  if(run)flush(i-1);
+  if(side)run={side,start:i};
+ }
+ if(run)flush(candles.length-1);
+ return runs;
+}
+
 export function renderChart(container,input,{window=60,price=false,priceLabel='复权价格',title='走势对比'}={}){
  observers.get(container)?.disconnect();container.replaceChildren();
  const series=input.map((item,index)=>{
@@ -121,10 +142,16 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
  const surface=document.createElement('div'),svg=element('svg',{'class':'chart-svg kline-svg',role:'img','aria-label':title}),legend=document.createElement('div'),tip=document.createElement('div');
  surface.className='chart-surface kline-chart-surface';legend.className='chart-legend kline-legend';tip.className='chart-tooltip';tip.hidden=true;tip.setAttribute('role','tooltip');surface.append(svg,tip);container.append(surface,legend);
  const overlayDefinitions=ema20ChartSeries(moving,candles).map((item,index)=>({...item,color:palette[(index+1)%palette.length]}));
+ // 每根K线所属的“未触碰EMA20间隔区间”（按日期索引，兼容缩放/平移后的可见切片）
+ const emaGapByDate=new Map();
+ for(const run of ema20GapRuns(candles,overlayDefinitions[0]?.values??[])){
+  for(let i=run.start;i<=run.end;i++){const date=candles[i]?.[0];if(date)emaGapByDate.set(date,{side:run.side,count:run.count})}
+ }
  overlayDefinitions.forEach(item=>{const button=document.createElement('button');button.type='button';button.setAttribute('aria-pressed','true');const swatch=document.createElement('span');swatch.className='swatch';swatch.style.borderColor=item.color;button.append(swatch,document.createTextNode(item.label));legend.appendChild(button)});
  for(const item of [{label:'成交量',color:'#9aa8ba',kind:'volume'},{label:'持仓量',color:'#a06b2c',kind:'oi'}]){
   const key=document.createElement('span');key.className='chart-key';key.dataset.kind=item.kind;const swatch=document.createElement('i');swatch.style.borderColor=item.color;key.append(swatch,document.createTextNode(item.label));legend.appendChild(key);
  }
+ const gapKey=document.createElement('span');gapKey.className='chart-key ema-gap';gapKey.append(document.createElement('i'),document.createTextNode('EMA20间隔区（连续>20根未触碰）'));legend.appendChild(gapKey);
  for(const level of priceLevels){
   const key=document.createElement('span');key.className=`chart-key level-${level.kind}`;key.dataset.levelLegend=level.id;const swatch=document.createElement('i');key.append(swatch,document.createTextNode(`${level.label} ${level.value.toFixed(2)}`));legend.appendChild(key);
  }
@@ -159,6 +186,20 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   svg.append(element('rect',{'data-chart-frame':'price',x:left,y:top,width:plotW,height:plotH,fill:'none',stroke:'#e2e7ee'}));
   for(let i=0;i<5;i++){const value=lo+(hi-lo)*i/4,py=y(value);svg.append(element('line',{x1:left,y1:py,x2:width-right,y2:py,stroke:'#edf0f5'}));svg.append(element('text',{x:left-8,y:py+4,'text-anchor':'end'},value.toFixed(0)))}
   svg.append(element('text',{x:left,y:13,'class':'axis-title'},'复权K线 / EMA20'));
+  const gapBands=[];let gapBand=null;
+  rows.forEach((row,index)=>{
+   const info=emaGapByDate.get(row[0]);
+   if(info){
+    if(gapBand&&gapBand.side===info.side)gapBand.end=index;
+    else{if(gapBand)gapBands.push(gapBand);gapBand={start:index,end:index,side:info.side,count:info.count};}
+   }else if(gapBand){gapBands.push(gapBand);gapBand=null;}
+  });
+  if(gapBand)gapBands.push(gapBand);
+  gapBands.forEach(band=>{
+   const bx=x(band.start)-bodyW/2-1,bw=Math.max(2,x(band.end)-x(band.start)+bodyW+2);
+   svg.append(element('rect',{x:bx,y:top,width:bw,height:plotH,fill:'#f3e2a0',opacity:.42,'data-ema-gap':band.side}));
+   if(bw>=58)svg.append(element('text',{x:x((band.start+band.end)/2),y:top+15,'text-anchor':'middle','class':'ema-gap-label'},`未触EMA20 ${band.count}根`));
+  });
   rows.forEach((row,index)=>{
    const [,open,high,low,close]=row,px=x(index),up=close>=open,color=up?'#cb524a':'#24846b';
    svg.append(element('line',{'data-candle-wick':'',x1:px,y1:y(high),x2:px,y2:y(low),stroke:color,'stroke-width':1.2}));

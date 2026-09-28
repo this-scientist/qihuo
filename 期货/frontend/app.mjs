@@ -475,7 +475,9 @@ function saveManualLevels(row,levels){
 function openKlineModal(row){
  const dialog=$('kline-modal'),host=$('kline-modal-chart');if(!dialog||!host)return;
  if(!dialog.open)dialog.showModal();
- requestAnimationFrame(()=>{klineModalController=renderCandlestickChart(host,chartInput(row),{window:Number($('window')?.value||60),title:`${row.name}可缩放日线K线`,interactive:true,onLevelChange:levels=>saveManualLevels(row,levels)})});
+ // 同步渲染：showModal 后布局立即可测，ResizeObserver 会随后校正尺寸；
+ // 不依赖 rAF（无头/后台环境下 rAF 可能被暂停导致弹窗空白）。
+ klineModalController=renderCandlestickChart(host,chartInput(row),{window:Number($('window')?.value||60),title:`${row.name}可缩放日线K线`,interactive:true,onLevelChange:levels=>saveManualLevels(row,levels)});
 }
 function closeKlineModal(){
  const dialog=$('kline-modal');if(dialog?.open)dialog.close();

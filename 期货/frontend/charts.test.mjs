@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries, klineWheelIntent} from './charts.mjs';
+import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries, klineWheelIntent, ema20GapRuns} from './charts.mjs';
 
 test('chart accepts only the EMA20 overlay',()=>{
  assert.deepEqual(ema20ChartSeries({ema20:[1,2],ma60:[3,4]}),[{id:'ema20',label:'EMA20',values:[1,2]}]);
@@ -56,4 +56,26 @@ test('K-line wheel navigates normally and zooms only with Control',()=>{
  assert.equal(klineWheelIntent({deltaY:-40,ctrlKey:true},'navigate'),'zoom-in');
  assert.equal(klineWheelIntent({deltaY:4,ctrlKey:false},'navigate'),'none');
  assert.equal(klineWheelIntent({deltaY:40,ctrlKey:false},'zoom'),'zoom-out');
+});
+
+test('ema20GapRuns marks same-side runs above or below EMA20 longer than 20 bars',()=>{
+ const above=Array.from({length:21},(_,i)=>[`202601${String(i+1).padStart(2,'0')}`,12,13,11,12,1,1]);
+ const touch=['20260201',10,10.5,9.5,10,1,1];
+ const below=Array.from({length:21},(_,i)=>[`202603${String(i+1).padStart(2,'0')}`,8,9,7,8,1,1]);
+ const runs=ema20GapRuns([...above,touch,...below],Array(43).fill(10));
+ assert.deepEqual(runs,[
+  {start:0,end:20,side:'up',count:21},
+  {start:22,end:42,side:'down',count:21},
+ ]);
+});
+
+test('ema20GapRuns requires more than 20 bars and breaks on touch or missing EMA',()=>{
+ const aboveBar=()=>['20260101',12,13,11,12,1,1];
+ assert.deepEqual(ema20GapRuns(Array.from({length:20},aboveBar),Array(20).fill(10)),[]);
+ const touched=Array.from({length:21},aboveBar),touchedEma=Array(21).fill(10);
+ touched[10][3]=10; // 下影线刚好触及EMA20，区间中断为两段各10根
+ assert.deepEqual(ema20GapRuns(touched,touchedEma),[]);
+ const broken=Array.from({length:25},aboveBar),brokenEma=Array(25).fill(10);
+ brokenEma[10]=null; // EMA缺失，中断为10根与14根两段
+ assert.deepEqual(ema20GapRuns(broken,brokenEma),[]);
 });

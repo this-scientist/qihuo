@@ -133,6 +133,8 @@ tr.opp-counter{opacity:.6}
 .chart-key[data-kind="oi"] i{border-color:#a06b2c}
 .chart-key.level-support i{border-color:#21835d;border-top-style:dashed}
 .chart-key.level-resistance i{border-color:#c43f3f;border-top-style:dashed}
+.chart-key.ema-gap i{border:0;width:14px;height:10px;border-radius:2px;background:#f3e2a0;opacity:.85}
+.ema-gap-label{fill:#8a6d1c;font-size:10px;pointer-events:none}
 .kline-modal{width:min(1320px,96vw);max-width:none;border:0;border-radius:10px;padding:0;background:#fff;color:inherit;box-shadow:0 24px 70px #15203340}
 .kline-modal::backdrop{background:rgba(28,37,51,.62);backdrop-filter:blur(2px)}
 .kline-modal-shell{padding:20px 24px 16px}
