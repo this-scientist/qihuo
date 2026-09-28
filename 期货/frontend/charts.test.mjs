@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries} from './charts.mjs';
+import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries, klineWheelIntent} from './charts.mjs';
 
 test('chart accepts only the EMA20 overlay',()=>{
  assert.deepEqual(ema20ChartSeries({ema20:[1,2],ma60:[3,4]}),[{id:'ema20',label:'EMA20',values:[1,2]}]);
@@ -47,4 +47,13 @@ test('priceFromPointer maps dragged level to price and clamps it to the chart do
  assert.equal(priceFromPointer(50,{top:20,height:200,low:90,high:110}),107);
  assert.equal(priceFromPointer(-20,{top:20,height:200,low:90,high:110}),110);
  assert.equal(priceFromPointer(260,{top:20,height:200,low:90,high:110}),90);
+});
+
+test('K-line wheel navigates normally and zooms only with Control',()=>{
+ assert.equal(klineWheelIntent({deltaY:40,ctrlKey:false},'navigate'),'next');
+ assert.equal(klineWheelIntent({deltaY:-40,ctrlKey:false},'navigate'),'previous');
+ assert.equal(klineWheelIntent({deltaY:40,ctrlKey:true},'navigate'),'zoom-out');
+ assert.equal(klineWheelIntent({deltaY:-40,ctrlKey:true},'navigate'),'zoom-in');
+ assert.equal(klineWheelIntent({deltaY:4,ctrlKey:false},'navigate'),'none');
+ assert.equal(klineWheelIntent({deltaY:40,ctrlKey:false},'zoom'),'zoom-out');
 });

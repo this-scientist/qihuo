@@ -8,11 +8,12 @@ export function withAverageIV(records){
  }
  return records.map(row=>{const group=groups.get(groupKey(row));return {...row,average_iv:group.count?group.sum/group.count:null,iv_sample_count:group.count}});
 }
-export function selectOptions(records,{minDays,maxDays,minVol,minOi,maxDistance,side,role,sort,minScore,align='aligned'}){
+export function selectOptions(records,{minDays,maxDays,minVol,minOi,maxDistance,side,role,sort,minScore,align='aligned',underlying='all'}){
  if(!Number.isInteger(minDays)||!Number.isInteger(maxDays))throw Error('到期天数须为整数');
  if(minDays<0||maxDays<minDays)throw Error('到期天数区间无效');
  const hasScore=minScore!=null&&Number.isFinite(minScore);
- const selected=records.filter(row=>(side==='all'||row.call_put===side)&&(role==='all'||row.role===role)&&Number.isFinite(row.days_to_expiry)&&row.days_to_expiry>=minDays&&row.days_to_expiry<=maxDays&&Number.isFinite(row.vol)&&row.vol>=minVol&&Number.isFinite(row.oi)&&row.oi>=minOi&&Number.isFinite(row.moneyness_pct)&&Math.abs(row.moneyness_pct)<=maxDistance&&(!hasScore||(row.tradability?.eligible===true&&row.tradability?.score!=null&&row.tradability.score>=minScore))&&(align!=='aligned'||row.tradability?.counter_trend!==true));
+ // 指定具体标的合约时合约身份最严格，role（主力/次主力）过滤不再叠加。
+ const selected=records.filter(row=>(underlying==='all'||row.underlying_code===underlying)&&(side==='all'||row.call_put===side)&&(role==='all'||underlying!=='all'||row.role===role)&&Number.isFinite(row.days_to_expiry)&&row.days_to_expiry>=minDays&&row.days_to_expiry<=maxDays&&Number.isFinite(row.vol)&&row.vol>=minVol&&Number.isFinite(row.oi)&&row.oi>=minOi&&Number.isFinite(row.moneyness_pct)&&Math.abs(row.moneyness_pct)<=maxDistance&&(!hasScore||(row.tradability?.eligible===true&&row.tradability?.score!=null&&row.tradability.score>=minScore))&&(align!=='aligned'||row.tradability?.counter_trend!==true));
  const metric=sort==='iv'?'iv_reference':sort==='oi'?'oi':'vol';
  return selected.sort((a,b)=>{
   if(sort==='trade'){

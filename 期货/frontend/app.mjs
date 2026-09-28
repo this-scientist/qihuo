@@ -3,12 +3,15 @@ import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
 import {buildOpportunityRows,ema20Summary,reminderDisplay} from './opportunity-workbench.mjs';
 import {renderHoldings} from './holdings.mjs';
+import {orderedDetailRows,adjacentDetailRow,wheelStep,ignoresDetailShortcut} from './detail-navigation.mjs';
 
 const $=id=>document.getElementById(id);
 const app=$('app');
-const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionChain:null,search:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{}};
+const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionContract:'auto',optionChain:null,search:'',detailSearch:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{}};
 let data;
 let klineModalController=null;
+let detailWheelAt=0;
+const detailCollapsedGroups=new Set();
 
 const VIEW_TITLES={
  market:['COMMODITIES','商品总览',''],
@@ -229,20 +232,92 @@ function metricBlocks(row){
  const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}<div class="quote-metrics" data-intraday="${contractOf(row)}">${quoteMetrics(row)}${execMetrics(row)}</div></div>`;
 }
-function renderDetail(){
- const row=selectedRow();
- if(!row){app.innerHTML=header()+'<p class="empty">当前日期暂无商品数据</p>';return}
- app.innerHTML=header()+`<section class="detail-layout">
-  <article class="decision-panel conclusion-panel"><div class="section-heading"><div><h2>${row.name} · ${codeOf(row)}</h2><div class="muted small">${row.main_code||'—'} / ${row.secondary_code||'—'}</div></div><button data-jump-options="${codeOf(row)}">查看T型报价</button></div>${ema20Assessment(row)}${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / EMA20',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
-  <article class="decision-panel chart-card"><div class="section-heading"><div><h2>日线K线、量仓与关键价位</h2><div class="muted small">点击图表放大 · 红色压力 · 绿色支撑</div></div><button type="button" data-open-kline>放大查看</button></div><div id="single-chart" class="chart-preview" data-open-kline role="button" tabindex="0" aria-label="放大查看可缩放K线图"></div></article>
-  <article class="decision-panel"><h2>量仓</h2><div class="structure-grid">${[['主力OI（手）',count(row.main_oi)],['次主力OI（手）',count(row.secondary_oi)],['主次合计OI（手）',count(row.pair_oi)],['固定月对OI 5日',pct(row.oi_change5)],['固定月对OI 20日',pct(row.oi_change20)],['成交量比',fmt(row.volume_ratio)],['量价表现',row.structure_evidence?.oi?.state],['移仓迹象',row.rollover_transfer?'有':row.rollover_transfer===false?'无':'缺失']].map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div>${renderHoldings(row.trader_positions)}</article>
-  <article class="decision-panel"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]].map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>
- </section>
- <dialog id="kline-modal" class="kline-modal" aria-labelledby="kline-modal-title"><div class="kline-modal-shell">
+const detailStatusLabel=row=>({actionable:'可做',wait_pullback:'等回踩',do_not_chase:'不可追',not_actionable:'不可做'}[row.ema20_actionability]||'不可做');
+const detailRows=()=>orderedDetailRows(rows(),state.detailSearch);
+function detailSidebar(selected){
+ const list=detailRows();const currentCode=selected?codeOf(selected):null;
+ const groups=[];
+ for(const item of list){
+  const label=detailStatusLabel(item);
+  if(!groups.length||groups[groups.length-1].label!==label)groups.push({label,items:[]});
+  groups[groups.length-1].items.push(item);
+ }
+ const body=groups.map(group=>{
+  const items=group.items.map(item=>{
+   const ema=ema20Summary(item);const active=codeOf(item)===currentCode;
+   return `<button type="button" class="detail-symbol${active?' active':''}" data-detail-code="${codeOf(item)}" aria-current="${active?'true':'false'}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(codeOf(item))} · ${ema.direction}·${ema.strength}</small></span><em>${detailStatusLabel(item)}</em></button>`;
+  }).join('');
+  const hasActive=group.items.some(item=>codeOf(item)===currentCode);
+  const open=!detailCollapsedGroups.has(group.label)||hasActive;
+  return `<details class="detail-group" data-detail-group="${group.label}"${open?' open':''}><summary class="detail-group-label"><span>${group.label}</span><em>${group.items.length}</em></summary><div class="detail-group-items">${items}</div></details>`;
+ }).join('');
+ return `<aside class="detail-sidebar" aria-label="商品列表"><div class="detail-sidebar-head"><strong>全部商品</strong><small>${list.length} 个 · 按交易机会排序</small></div><input id="detail-search" type="search" value="${escapeHtml(state.detailSearch)}" placeholder="搜索品种 / 代码 / 合约" aria-label="搜索商品"><div class="detail-list"><div class="detail-symbols">${body||'<p class="empty mini">没有匹配商品</p>'}</div><div class="detail-rail" data-detail-rail aria-hidden="true"><div class="detail-rail-thumb"></div></div></div><p class="detail-shortcut-help">列表或K线滚轮切换 · ↑↓切换 · K线Ctrl+滚轮缩放</p></aside>`;
+}
+function flashDetailBoundary(){
+ const el=document.querySelector('.detail-symbol.active');
+ if(!el)return;
+ el.classList.remove('boundary');void el.offsetWidth;el.classList.add('boundary');
+ setTimeout(()=>el.classList.remove('boundary'),260);
+}
+function navigateDetail(step){
+ const list=detailRows(),current=selectedRow();
+ if(!current)return;
+ const next=adjacentDetailRow(list,codeOf(current),step);
+ if(!next||codeOf(next)===codeOf(current)){flashDetailBoundary();return}
+ detailCollapsedGroups.delete(detailStatusLabel(next));
+ state.selected=codeOf(next);render();
+ requestAnimationFrame(()=>document.querySelector('[aria-current="true"]')?.scrollIntoView({block:'nearest'}));
+}
+// 滚轮切换共用 180ms 冷却，防止触控板惯性一次跳过多个商品。
+function navigateDetailWheelStep(step){
+ const now=performance.now();
+ if(now-detailWheelAt<180)return;
+ detailWheelAt=now;navigateDetail(step);
+}
+function navigateDetailByWheel(event){
+ const step=wheelStep(event.deltaY);
+ if(!step)return;
+ event.preventDefault();
+ navigateDetailWheelStep(step);
+}
+function handleDetailKey(event){
+ if(state.view!=='detail'||!['ArrowDown','ArrowUp'].includes(event.key))return;
+ if(ignoresDetailShortcut(event.target,Boolean(document.querySelector('dialog[open]'))))return;
+ event.preventDefault();
+ navigateDetail(event.key==='ArrowDown'?1:-1);
+}
+function holdingPanel(row){
+ const items=[['主力OI（手）',count(row.main_oi)],['次主力OI（手）',count(row.secondary_oi)],['主次合计OI（手）',count(row.pair_oi)],['固定月对OI 5日',pct(row.oi_change5)],['固定月对OI 20日',pct(row.oi_change20)],['成交量比',fmt(row.volume_ratio)],['量价表现',row.structure_evidence?.oi?.state],['移仓迹象',row.rollover_transfer?'有':row.rollover_transfer===false?'无':'缺失']];
+ return `<article class="decision-panel detail-holdings"><h2>量仓</h2><div class="structure-grid">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}</div>${renderHoldings(row.trader_positions)}</article>`;
+}
+function structurePanel(row){
+ const items=[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]];
+ return `<article class="decision-panel detail-structure"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>`;
+}
+function klineDialog(row){
+ return `<dialog id="kline-modal" class="kline-modal" aria-labelledby="kline-modal-title"><div class="kline-modal-shell">
   <header class="kline-modal-header"><div><span class="eyebrow">INTERACTIVE CHART</span><h2 id="kline-modal-title">${row.name} · 日线结构</h2><p>滚轮缩放 · 横向拖动 · 双击复位 · 拖动红绿虚线校正价位</p></div><div class="kline-modal-actions"><button type="button" data-chart-zoom-out aria-label="缩小时间范围">−</button><button type="button" data-chart-reset>重置视图</button><button type="button" data-chart-zoom-in aria-label="放大时间范围">＋</button><button type="button" data-reset-levels>恢复系统价位</button><button type="button" class="modal-close" data-close-kline aria-label="关闭">×</button></div></header>
   <div id="kline-modal-chart"></div>
   <footer class="kline-modal-footer"><span><i class="support-key"></i>支撑位：可上下拖动</span><span><i class="resistance-key"></i>压力位：可上下拖动</span><span>成交量为柱，持仓量为棕色线</span></footer>
  </div></dialog>`;
+}
+function renderDetail(){
+ const row=selectedRow();
+ if(!row){app.innerHTML=header()+'<p class="empty">当前日期暂无商品数据</p>';return}
+ const ema=ema20Summary(row);
+ app.innerHTML=header()+`<section class="detail-workspace">
+  ${detailSidebar(row)}
+  <div class="detail-main">
+   <header class="detail-instrument"><div><h2>${escapeHtml(row.name)}</h2><span>${codeOf(row)} · ${row.main_code||'—'}${row.secondary_code?` / ${row.secondary_code}`:''}</span></div><div class="detail-instrument-state"><strong>${detailStatusLabel(row)}</strong><span>${ema.direction} · ${ema.strength}</span></div><button type="button" data-jump-options="${codeOf(row)}">查看T型报价</button></header>
+   <article class="detail-chart-stage"><div class="section-heading"><div><h2>日线 K 线 / EMA20</h2><div class="muted small">普通滚轮切换品种 · Ctrl + 滚轮缩放（锚点为鼠标位置） · 横向拖动平移 · 红色压力 · 绿色支撑</div></div><button type="button" data-open-kline>全屏查看</button></div><div id="single-chart" class="detail-primary-chart" tabindex="0" aria-label="可缩放EMA20日线K线图：普通滚轮切换品种，Ctrl加滚轮缩放"></div></article>
+   ${ema20Assessment(row)}
+   <section class="detail-analysis-grid">
+    <article class="decision-panel detail-actionability"><h2>可做性与价格位置</h2>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / EMA20',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
+    ${holdingPanel(row)}
+    ${structurePanel(row)}
+   </section>
+  </div>
+ </section>${klineDialog(row)}`;
  renderSingleChart(row);
 }
 function optionTargetSide(row){return isShort(row)?'P':isLong(row)?'C':null}
@@ -257,17 +332,42 @@ async function ensureOptions(){
  catch(error){state.optionChain={records:[],status:error.message};}
  return state.optionChain;
 }
-function optionRows(row,chain){
+// T型报价只允许围绕一个真实标的合约配对认购/认沽；主力与次主力的期权不能混在同一张表里按行权价合并。
+function optionUnderlyings(row,chain){
+ const records=chain.records||[];
+ return [['main','主力',row.main_code],['secondary','次主力',row.secondary_code]]
+  .filter(([, ,code])=>code)
+  .map(([role,label,code])=>({role,label,code,count:records.filter(r=>r.underlying_code===code).length}));
+}
+function selectedOptionUnderlying(row,chain){
+ const list=optionUnderlyings(row,chain);
+ if(!list.length)return null;
+ const pinned=list.find(u=>u.role===state.optionContract);
+ // 默认（auto）：主力优先，主力已到期无期权时自动落到次主力。
+ return pinned||list.find(u=>u.count>0)||list[0];
+}
+function optionContractTabs(row,chain){
+ const current=selectedOptionUnderlying(row,chain);
+ // 已到期合约仍可点选：选中后表格区展示明确的“已到期”空态，而不是静默不可用。
+ return `<div class="mode-tabs" role="tablist" aria-label="标的合约切换">${optionUnderlyings(row,chain).map(u=>`<button type="button" role="tab" data-option-contract="${u.role}" class="${current&&u.code===current.code?'active':''}">${u.label} ${u.code}${u.count?`（${u.count}个）`:'（已到期）'}</button>`).join('')}</div>`;
+}
+function optionRows(row,chain,underlying){
  const side=optionTargetSide(row);
  const [min,max]=optionModeRange();
- const candidates=(chain.records||[]).filter(item=>item.main_code===codeOf(row)||item.underlying_code===row.main_code||item.underlying_code===row.secondary_code);
- const byStrike=new Map();
+ const candidates=(chain.records||[]).filter(item=>item.underlying_code===underlying.code);
+ if(!candidates.length)return `<tr><td colspan="5" class="empty">${underlying.code}（${underlying.label}）已到期或暂无可用期权，请切换到${underlying.role==='main'?'次主力':'其他'}合约。</td></tr>`;
+ // 同一标的合约可能挂多个到期日的期权（如农产品新旧合约交替），先按到期日分组再按行权价配对。
+ const byMaturity=new Map();
  candidates.forEach(item=>{
-  const key=String(item.exercise_price);
-  byStrike.set(key,{...(byStrike.get(key)||{}),[item.call_put]:item});
+  const maturity=item.maturity_date||'';
+  const byStrike=byMaturity.get(maturity)||new Map();
+  byStrike.set(String(item.exercise_price),{...(byStrike.get(String(item.exercise_price))||{}),[item.call_put]:item});
+  byMaturity.set(maturity,byStrike);
  });
- if(!byStrike.size)return `<tr><td colspan="7" class="empty">${chain.status||'暂无该品种期权链'}</td></tr>`;
- return [...byStrike.entries()].sort((a,b)=>Number(a[0])-Number(b[0])).map(([strike,pair])=>{
+ const maturityLabel=m=>m?`${m.slice(0,4)}-${m.slice(4,6)}-${m.slice(6)}`:'到期日缺失';
+ return [...byMaturity.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([maturity,byStrike],section)=>{
+  const divider=byMaturity.size>1?`<tr class="maturity-row"><td colspan="5">期权到期日 ${maturityLabel(maturity)}</td></tr>`:'';
+  return divider+[...byStrike.entries()].sort((a,b)=>Number(a[0])-Number(b[0])).map(([strike,pair])=>{
   const call=pair.C,put=pair.P;
   const best=item=>item&&Math.abs(Math.abs(item.delta||0)-((min+max)/2))<=(max-min)/2;
   const callHot=side==='C'&&best(call),putHot=side==='P'&&best(put);
@@ -279,6 +379,7 @@ function optionRows(row,chain){
    <td class="${side==='P'?'option-aligned':'option-faded'}">${put?optionCell(put,putHot):'—'}</td>
   </tr>`;
  }).join('');
+ }).join('');
 }
 function optionCell(item,hot){
  const score=item.tradability?.score;
@@ -286,8 +387,10 @@ function optionCell(item,hot){
 }
 function optionCandidates(row,chain){
  if(!['Call','Put'].includes(row.option_action))return [];
+ const underlying=selectedOptionUnderlying(row,chain);
+ if(!underlying||!underlying.count)return [];
  const side=optionTargetSide(row);
- const candidates=(chain.records||[]).filter(item=>(item.main_code===codeOf(row)||item.underlying_code===row.main_code||item.underlying_code===row.secondary_code)&&item.call_put===side&&item.tradability?.recommendable===true);
+ const candidates=(chain.records||[]).filter(item=>item.underlying_code===underlying.code&&item.call_put===side&&item.tradability?.recommendable===true);
  const inBand=item=>Number.isFinite(item.days_to_expiry)&&item.days_to_expiry>=7&&item.days_to_expiry<=45&&Number.isFinite(item.delta)&&Math.abs(item.delta)>=.1&&Math.abs(item.delta)<=.6;
  const rank={强烈信号:0,可做:1,观察:2,不可做:3};
  return candidates.filter(inBand).sort((a,b)=>(rank[a.tradability?.signal_level]??9)-(rank[b.tradability?.signal_level]??9)||(b.tradability?.scenario?.conservative_rr??-1)-(a.tradability?.scenario?.conservative_rr??-1)||(b.tradability?.score??-1)-(a.tradability?.score??-1)||Math.min(b.vol||0,b.oi||0)-Math.min(a.vol||0,a.oi||0)).slice(0,3);
@@ -311,7 +414,8 @@ async function renderOptions(){
  app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">方向侧高亮，反向侧灰显；合约筛选按敏感度区间执行。</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div><div class="loading-panel">正在读取期权链…</div></section>`;
  const chain=await ensureOptions();
  if(state.view!=='options')return;
- app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">${chain.status||'期权链'} · 当前模式 ${optionModeRange()[2]}</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div>${optionContextPanel(row,chain)}<div class="table-wrap t-chain"><table><thead><tr><th>认购</th><th>${term('敏感度','delta')}</th><th>${term('行权价','strike')}</th><th>${term('敏感度','delta')}</th><th>认沽</th></tr></thead><tbody>${optionRows(row,chain)}</tbody></table></div></section>`;
+ const underlying=selectedOptionUnderlying(row,chain);
+ app.innerHTML=header()+`<section class="decision-panel"><div class="section-heading"><div><h2>${row.name} · ${directionText(row.decision_direction)} T型报价</h2><div class="muted small">${chain.status||'期权链'} · 标的 ${underlying?`${underlying.code}（${underlying.label}）`:''} · 当前模式 ${optionModeRange()[2]}</div></div><div class="mode-tabs"><button data-option-mode="steady" class="${state.optionMode==='steady'?'active':''}">稳健 .40-.55</button><button data-option-mode="default" class="${state.optionMode==='default'?'active':''}">默认 .25-.40</button><button data-option-mode="aggressive" class="${state.optionMode==='aggressive'?'active':''}">激进 .15-.30</button></div></div><div class="option-contract-bar">${optionContractTabs(row,chain)}</div>${optionContextPanel(row,chain)}<div class="table-wrap t-chain"><table><thead><tr><th>认购</th><th>${term('敏感度','delta')}</th><th>${term('行权价','strike')}</th><th>${term('敏感度','delta')}</th><th>认沽</th></tr></thead><tbody>${underlying?optionRows(row,chain,underlying):`<tr><td colspan="5" class="empty">该品种暂无主力/次主力合约信息</td></tr>`}</tbody></table></div></section>`;
 }
 function monitorState(row){
  if(row.state_v2==='START'||row.state_v2==='TREND')return 'HEALTHY';
@@ -347,7 +451,13 @@ function sectorSeries(sector){
 }
 function renderSingleChart(row){
  if(!data.candles?.[codeOf(row)])return;
- renderCandlestickChart($('single-chart'),chartInput(row),{window:Number($('window')?.value||60),title:`${row.name}日线K线、成交量与持仓量`});
+ renderCandlestickChart($('single-chart'),chartInput(row),{
+  window:Number($('window')?.value||60),
+  title:`${row.name}日线K线、成交量与持仓量`,
+  interactive:true,fitHeight:true,
+  wheelMode:'navigate',onNavigate:navigateDetailWheelStep,
+  onLevelChange:levels=>saveManualLevels(row,levels),
+ });
 }
 function chartLevels(row){
  const manual=state.manualLevels[codeOf(row)]||{};
@@ -390,13 +500,60 @@ function wireView(){
  wireRows();
  document.querySelectorAll('[data-candidate-tab]').forEach(button=>button.addEventListener('click',()=>{state.candidateTab=button.dataset.candidateTab;renderCandidates();wireView();}));
  document.querySelectorAll('[data-option-mode]').forEach(button=>button.addEventListener('click',()=>{state.optionMode=button.dataset.optionMode;renderOptions().then(wireView);}));
- document.querySelectorAll('[data-jump-options]').forEach(button=>button.addEventListener('click',()=>setView('options')));
+ document.querySelectorAll('[data-option-contract]').forEach(button=>button.addEventListener('click',()=>{state.optionContract=button.dataset.optionContract;renderOptions().then(wireView);}));
+ document.querySelectorAll('[data-jump-options]').forEach(button=>button.addEventListener('click',()=>{state.optionContract='auto';setView('options')}));
  const detailRow=state.view==='detail'?selectedRow():null;
  if(detailRow){
-  document.querySelectorAll('[data-open-kline]').forEach(node=>{
-   node.addEventListener('click',()=>openKlineModal(detailRow));
-   node.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openKlineModal(detailRow)}});
-  });
+  const searchInput=$('detail-search');
+  const applyDetailSearch=value=>{
+   if(value===state.detailSearch)return;
+   state.detailSearch=value;render();
+   requestAnimationFrame(()=>{const input=$('detail-search');if(input){input.focus();const end=input.value.length;input.setSelectionRange(end,end)}});
+  };
+  // IME 组合期间不重渲染，否则输入框被销毁、拼音无法上屏。
+  searchInput?.addEventListener('input',event=>{if(!event.isComposing)applyDetailSearch(event.target.value)});
+  searchInput?.addEventListener('compositionend',event=>applyDetailSearch(event.target.value));
+  const listEl=document.querySelector('.detail-symbols'),rail=document.querySelector('.detail-rail'),railThumb=rail?.querySelector('.detail-rail-thumb');
+  listEl?.addEventListener('wheel',navigateDetailByWheel,{passive:false});
+  let syncRail=null;
+  if(listEl&&rail&&railThumb){
+   syncRail=()=>{
+    const range=listEl.scrollHeight-listEl.clientHeight;
+    rail.hidden=range<=0;
+    if(range<=0)return;
+    const thumbH=Math.max(24,listEl.clientHeight*listEl.clientHeight/listEl.scrollHeight);
+    railThumb.style.height=`${thumbH}px`;
+    railThumb.style.transform=`translateY(${(rail.clientHeight-thumbH)*listEl.scrollTop/range}px)`;
+   };
+   syncRail();
+   listEl.addEventListener('scroll',syncRail,{passive:true});
+   let railDrag=null;
+   rail.addEventListener('pointerdown',event=>{
+    event.preventDefault();
+    const range=listEl.scrollHeight-listEl.clientHeight,track=rail.clientHeight-railThumb.getBoundingClientRect().height;
+    if(event.target===rail&&track>0&&range>0)listEl.scrollTop=(event.clientY-rail.getBoundingClientRect().top-railThumb.getBoundingClientRect().height/2)*range/track;
+    railDrag={y:event.clientY,top:listEl.scrollTop};
+    rail.classList.add('dragging');
+    try{rail.setPointerCapture(event.pointerId)}catch{}
+   });
+   rail.addEventListener('pointermove',event=>{
+    if(!railDrag)return;
+    const range=listEl.scrollHeight-listEl.clientHeight,track=rail.clientHeight-railThumb.getBoundingClientRect().height;
+    if(range>0&&track>0)listEl.scrollTop=railDrag.top+(event.clientY-railDrag.y)*range/track;
+   });
+   const endRailDrag=()=>{railDrag=null;rail.classList.remove('dragging')};
+   rail.addEventListener('pointerup',endRailDrag);rail.addEventListener('pointercancel',endRailDrag);
+  }
+  document.querySelectorAll('.detail-group').forEach(group=>group.addEventListener('toggle',()=>{
+   const label=group.dataset.detailGroup;
+   if(group.open)detailCollapsedGroups.delete(label);else detailCollapsedGroups.add(label);
+   syncRail?.();
+  }));
+  document.querySelectorAll('[data-detail-code]').forEach(button=>button.addEventListener('click',()=>{
+   const item=rows().find(r=>codeOf(r)===button.dataset.detailCode);
+   if(item){state.selected=codeOf(item);render();button.blur()}
+  }));
+  document.querySelector('[data-open-kline]')?.addEventListener('click',()=>openKlineModal(detailRow));
   document.querySelector('[data-close-kline]')?.addEventListener('click',closeKlineModal);
   document.querySelector('[data-chart-zoom-in]')?.addEventListener('click',()=>klineModalController?.zoomIn());
   document.querySelector('[data-chart-zoom-out]')?.addEventListener('click',()=>klineModalController?.zoomOut());
@@ -473,6 +630,7 @@ async function init(){
   data=await api('/api/data'+(asofQuery()?'?'+asofQuery():''));
   $('data-date').textContent=`收盘日 ${data.asof.slice(0,4)}.${data.asof.slice(4,6)}.${data.asof.slice(6)} · ${rows().length}条决策`;
   document.querySelectorAll('.top-tabs button').forEach(button=>button.addEventListener('click',()=>setView(button.dataset.view)));
+  document.addEventListener('keydown',handleDetailKey);
   const oppLink=$('nav-opportunities');if(oppLink)oppLink.href='/opportunities.html'+(asofQuery()?'?'+asofQuery():'');
   await mountToolbar().catch(()=>{});
   render();

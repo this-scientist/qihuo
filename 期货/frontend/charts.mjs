@@ -6,6 +6,13 @@ const dateTime=date=>Date.UTC(+date.slice(0,4),+date.slice(4,6)-1,+date.slice(6,
 const shortDate=time=>new Date(time).toISOString().slice(5,10);
 const number=(value,price)=>price?value.toFixed(1):`${value>=0?'+':''}${value.toFixed(2)}%`;
 
+// 滚轮意图：navigate 模式下普通滚轮交给外层做商品切换，Ctrl+滚轮（及 zoom 模式）缩放时间窗口。
+export function klineWheelIntent({deltaY=0,ctrlKey=false}={},mode='zoom'){
+  if(Math.abs(deltaY)<8)return 'none';
+  if(mode==='navigate'&&!ctrlKey)return deltaY>0?'next':'previous';
+  return deltaY>0?'zoom-out':'zoom-in';
+}
+
 export function zoomRange({start,count,total},anchorIndex,factor,{minimum=12}={}){
  const nextCount=Math.max(Math.min(minimum,total),Math.min(total,Math.round(count*factor)));
  const ratio=count>1?Math.max(0,Math.min(1,anchorIndex/(count-1))):1;
@@ -105,7 +112,7 @@ export function renderChart(container,input,{window=60,price=false,priceLabel='�
  draw();const observer=new ResizeObserver(draw);observer.observe(surface);observers.set(container,observer);
 }
 
-export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange}={}){
+export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange,wheelMode='zoom',onNavigate,fitHeight=false}={}){
  observers.get(container)?.disconnect();container.replaceChildren();
  const allRows=candles.filter(row=>row.length>=5&&row.slice(1,5).every(Number.isFinite));
  if(allRows.length<2){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无可展示的K线';container.appendChild(empty);return null}
@@ -137,7 +144,7 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
  const resetLevels=()=>{priceLevels=priceLevels.map(level=>({...level,value:level.systemValue}));notifyLevels();draw()};
  function draw(){
   svg.replaceChildren();tip.hidden=true;
-  const rows=allRows.slice(range.start,range.start+range.count),width=Math.max(300,surface.getBoundingClientRect().width),height=interactive?590:430;
+  const rows=allRows.slice(range.start,range.start+range.count),width=Math.max(300,surface.getBoundingClientRect().width),height=fitHeight?Math.max(380,Math.round((container.getBoundingClientRect().height||590)-(legend.offsetHeight||26))):interactive?590:430;
   svg.setAttribute('viewBox',`0 0 ${width} ${height}`);svg.setAttribute('height',height);svg.dataset.visibleStart=rows[0][0];svg.dataset.visibleEnd=rows.at(-1)[0];svg.append(element('title',{},title));
   const left=68,right=72,top=24,bottom=40,gap=28,activityH=activity?105:0,plotH=height-top-bottom-activityH-(activity?gap:0),activityTop=top+plotH+gap,plotW=width-left-right;
   lastLayout={width,plotW,left};
@@ -203,7 +210,7 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   for(let i=0;i<ticks;i++){const index=Math.round((rows.length-1)*i/(ticks-1)),px=x(index);svg.append(element('text',{x:px,y:height-15,'text-anchor':i===0?'start':i===ticks-1?'end':'middle'},shortDate(dateTime(rows[index][0]))))}
   const guide=element('line',{x1:0,x2:0,y1:top,y2:activity?activityTop+activityH:top+plotH,stroke:'#8390a3',visibility:'hidden','stroke-dasharray':'3 3'});svg.append(guide);
   const overlay=element('rect',{x:left,y:top,width:plotW,height:(activity?activityTop+activityH:top+plotH)-top,fill:'transparent','data-kline-overlay':''});
-  const pointerIndex=event=>{const bounds=svg.getBoundingClientRect(),px=(event.clientX-bounds.left)*width/bounds.width;return Math.max(0,Math.min(rows.length-1,Math.round((px-left)/plotW*rows.length-.5)))};
+  const pointerIndex=event=>{const bounds=svg.getBoundingClientRect();if(!bounds.width)return Math.max(0,rows.length-1);const px=(event.clientX-bounds.left)*width/bounds.width;return Math.max(0,Math.min(rows.length-1,Math.round((px-left)/plotW*rows.length-.5)))};
   const showTip=event=>{
    const index=pointerIndex(event),row=rows[index],gx=x(index);guide.setAttribute('x1',gx);guide.setAttribute('x2',gx);guide.setAttribute('visibility','visible');tip.replaceChildren();
    const date=document.createElement('strong');date.textContent=`${row[0].slice(0,4)}-${row[0].slice(4,6)}-${row[0].slice(6)}`;tip.appendChild(date);
@@ -214,12 +221,19 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   overlay.addEventListener('pointerleave',()=>{if(!pan){tip.hidden=true;guide.setAttribute('visibility','hidden')}});
   if(interactive){
    overlay.style.cursor='grab';
-   overlay.addEventListener('wheel',event=>{event.preventDefault();const index=pointerIndex(event),factor=event.deltaY<0?.75:1.34;range=zoomRange({...range,total:allRows.length},index,factor);draw()},{passive:false});
+   overlay.addEventListener('wheel',event=>{
+    const action=klineWheelIntent(event,wheelMode);
+    if(action==='none')return;
+    event.preventDefault();
+    if(action==='next'||action==='previous'){onNavigate?.(action==='next'?1:-1);return}
+    const index=pointerIndex(event),factor=action==='zoom-in'?.75:1.34;
+    range=zoomRange({...range,total:allRows.length},index,factor);draw();
+   },{passive:false});
    overlay.addEventListener('pointerdown',event=>{surface.setPointerCapture(event.pointerId);pan={x:(event.clientX-svg.getBoundingClientRect().left)*width/svg.getBoundingClientRect().width,start:range.start};overlay.style.cursor='grabbing'});
    overlay.addEventListener('dblclick',resetView);
   }
   svg.append(overlay,...levelHandles);
  }
- draw();const observer=new ResizeObserver(draw);observer.observe(surface);observers.set(container,observer);
+ draw();const observer=new ResizeObserver(draw);observer.observe(surface);if(fitHeight)observer.observe(container);observers.set(container,observer);
  return {zoomIn:()=>applyZoom(.75),zoomOut:()=>applyZoom(1.34),resetView,resetLevels,getLevels:()=>priceLevels.map(level=>({...level}))};
 }

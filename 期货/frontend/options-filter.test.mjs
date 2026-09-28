@@ -43,6 +43,14 @@ test('score filter never admits an ineligible contract even with a high raw scor
  ]);
  assert.deepEqual(selectOptions(rows,settings).map(r=>r.tradability.score),[70]);
 });
+test('underlying filter selects one contract and overrides role filter',()=>{
+ const rows=withAverageIV([row({underlying_code:'M2701',role:'main'}),row({underlying_code:'M2705',role:'secondary',vol:200})]);
+ const base={minDays:0,maxDays:10,minVol:0,minOi:0,maxDistance:100,side:'all',role:'all',sort:'vol'};
+ assert.deepEqual(selectOptions(rows,{...base,underlying:'M2705'}).map(r=>r.underlying_code),['M2705']);
+ assert.equal(selectOptions(rows,{...base,underlying:'all'}).length,2);
+ // 指定合约时忽略 role，避免“选了主力合约却被次主力身份过滤”的空结果。
+ assert.equal(selectOptions(rows,{...base,underlying:'M2701',role:'secondary'}).length,1);
+});
 test('aligned mode hides counter-trend rows; neutral and missing stay',()=>{
  const rows=withAverageIV([
   row({tradability:{score:70,counter_trend:true}}),     // 逆趋势：默认隐藏

@@ -13,7 +13,7 @@ const GLOSSARY={
  '持仓量（手）':'未平仓合约手数；严格大于1000手才通过资格门槛。',
 };
 const tips=mountTips(GLOSSARY);
-const $=id=>document.getElementById(id);let data,chain,filtered=[],toolbar,detailRequest=0,filterRequest=0,autoOpenCode=null;
+const $=id=>document.getElementById(id);let data,chain,filtered=[],toolbar,detailRequest=0,filterRequest=0,autoOpenCode=null,autoPickUnderlying=true;
 const fmt=value=>value==null?'—':Number(value).toFixed(2);
 const DIR_TEXT={long:'多头',short:'空头',neutral:'震荡'};
 const ns='http://www.w3.org/2000/svg';
@@ -80,6 +80,36 @@ async function show(option,scroll=true){
  try{const underlying=await api(`/api/options/underlying?asof=${data.asof}&code=${encodeURIComponent(option.underlying_code)}`);if(request!==detailRequest)return;if(!underlying.values.length){$('option-underlying-chart').textContent=underlying.reason||'该真实月份合约暂无有效历史';return}renderChart($('option-underlying-chart'),underlying.values.length?[{id:underlying.code,label:`真实标的 ${underlying.code}`,values:underlying.values},...Object.entries(underlying.moving||{}).map(([key,values])=>({id:key,label:key.toUpperCase(),values:underlying.values.map((v,i)=>[v[0],values[i]])}))]:[],{window:60,price:true,priceLabel:'真实合约价格',title:`期权对应真实月份 ${option.underlying_code} 走势`})}catch(error){if(request!==detailRequest)return;$('option-underlying-chart').textContent=error.message}
  if(scroll)$('option-detail').scrollIntoView({behavior:'smooth',block:'start'});
 }
+// 标的合约切换器：只列 selected 的主力和次主力合约。主力期权到期（无数据）时标“已到期”，不引入其他月份。
+function populateUnderlying(){
+ const select=$('option-underlying'),previous=select.value,record=(data.records||[]).find(r=>r.ts_code===$('option-code').value);
+ select.replaceChildren();
+ const all=document.createElement('option');all.value='all';all.textContent='全部（主力+次主力）';select.appendChild(all);
+ if(!record){select.disabled=true;return}
+ select.disabled=false;
+ const seen=new Set();
+ [['main','主力',record.main_code],['secondary','次主力',record.secondary_code]].forEach(([role,label,code])=>{
+  if(!code||seen.has(code))return;seen.add(code);
+  const option=document.createElement('option');option.value=code;option.dataset.role=role;option.textContent=`${code} · ${label}`;select.appendChild(option);
+ });
+ select.value=[...select.options].some(o=>o.value===previous)?previous:'all';
+}
+function resolveUnderlying(){
+ const select=$('option-underlying');if(select.disabled)return;
+ const counts={};(chain?.records||[]).forEach(r=>{counts[r.underlying_code]=(counts[r.underlying_code]||0)+1});
+ [...select.options].forEach(o=>{
+  if(o.value==='all')return;
+  const label=`${o.value} · ${o.dataset.role==='main'?'主力':'次主力'}`,n=counts[o.value]||0;
+  o.textContent=n?`${label}（${n}个）`:`${label}（已到期）`;
+ });
+ // 深链指定具体期权时，切换器跟随该期权的真实标的合约；否则按“主力优先”自动选有数据的合约。
+ if(autoOpenCode){const hit=(chain?.records||[]).find(r=>r.ts_code===autoOpenCode);if(hit&&[...select.options].some(o=>o.value===hit.underlying_code)){select.value=hit.underlying_code;autoPickUnderlying=false}}
+ if(autoPickUnderlying){
+  const first=[...select.options].find(o=>o.value!=='all'&&(counts[o.value]||0)>0);
+  if(first)select.value=first.value;
+ }
+ autoPickUnderlying=false;
+}
 async function apply(){
  const request=++filterRequest;++detailRequest;
  $('option-error').textContent='';$('apply-options').disabled=true;
@@ -93,7 +123,9 @@ async function apply(){
   const response=await api(`/api/options?asof=${data.asof}&rate=${settings['reference-rate']/100}${code==='all'?'':'&code='+encodeURIComponent(code)}`);
   if(request!==filterRequest)return;
   chain=response;
-  filtered=selectOptions(withAverageIV(chain.records),{minDays:settings['min-days'],maxDays:settings['max-days'],minVol:settings['min-vol'],minOi:settings['min-oi'],maxDistance:settings['max-distance'],side,role,sort:$('option-sort').value,minScore,align:$('align-mode').value});
+  resolveUnderlying();
+  const underlying=$('option-underlying').value;
+  filtered=selectOptions(withAverageIV(chain.records),{minDays:settings['min-days'],maxDays:settings['max-days'],minVol:settings['min-vol'],minOi:settings['min-oi'],maxDistance:settings['max-distance'],side,role,sort:$('option-sort').value,minScore,align:$('align-mode').value,underlying});
   $('option-count').textContent=`${filtered.length} / ${chain.records.length}`;$('option-rows').replaceChildren();
   filtered.forEach(option=>{const row=document.createElement('tr');row.dataset.option=option.ts_code;
    const first=document.createElement('td'),name=document.createElement('strong'),under=document.createElement('span');name.textContent=option.ts_code;
@@ -109,7 +141,11 @@ async function apply(){
    row.tabIndex=0;row.setAttribute('aria-label',`查看 ${option.ts_code} 及对应期货走势`);row.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();show(option)}};
    row.onclick=()=>show(option);$('option-rows').appendChild(row);
   });
-  if(!filtered.length){const row=document.createElement('tr'),td=document.createElement('td');td.colSpan=8;td.className='empty';td.textContent=chain.records.length?'当前条件下无匹配期权：可降低"只看可做性"阈值、扩大天数区间或放宽量仓条件':chain.status||'该日期期权链尚未采集';row.appendChild(td);$('option-rows').appendChild(row)}
+  if(!filtered.length){const row=document.createElement('tr'),td=document.createElement('td');td.colSpan=8;td.className='empty';
+   const sel=$('option-underlying');const emptyMain=sel.value!=='all'&&!(chain.records||[]).some(r=>r.underlying_code===sel.value);
+   if(emptyMain){td.textContent=`${sel.value} 已到期或暂无可用期权，请切换到其他合约。`}
+   else{td.textContent=chain.records.length?'当前条件下无匹配期权：可降低"只看可做性"阈值、扩大天数区间或放宽量仓条件':chain.status||'该日期期权链尚未采集'}
+   row.appendChild(td);$('option-rows').appendChild(row)}
   $('option-coverage').textContent=`${chain.status}；${chain.coverage?.filter(item=>!item.underlying_code).map(item=>`${item.exchange} ${item.count}条`).join('；')||'无覆盖报告'}；失败 ${chain.failures?.length||0}。`+(chain.failures?.map(f=>`${f.exchange} ${f.underlying_code||''} ${f.reason}`).join('；')||'');$('option-limitations').textContent=(chain.limitations||[]).join('；');
   $('option-context').textContent=`数据日期 ${data.asof} · 到期剩余 ${settings['min-days']}–${settings['max-days']} 个自然日（含两端） · 点击任一期权查看对应真实月份走势。`;
   const target=autoOpenCode?filtered.find(option=>option.ts_code===autoOpenCode):null;
@@ -127,16 +163,20 @@ async function init(){
   // 支持从期权机会总览等页面带筛选参数/指定合约深链。
   [['min_days','min-days'],['max_days','max-days'],['min_vol','min-vol'],['min_oi','min-oi'],
    ['max_distance','max-distance'],['reference_rate','reference-rate'],
-   ['side','option-side'],['role','option-role'],['align','align-mode'],['min_score','min-score']]
+   ['side','option-side'],['role','option-role'],['align','align-mode'],['min_score','min-score'],['underlying','option-underlying']]
    .forEach(([key,id])=>{if(params.has(key))$(id).value=params.get(key)});
   autoOpenCode=params.get('ts_code');
+  populateUnderlying();
+  if(params.has('underlying')){autoPickUnderlying=false}
+  else if(params.has('role')){const map={main:'main',secondary:'secondary'};const target=map[params.get('role')];if(target){const option=[...$('option-underlying').options].find(o=>o.dataset.role===target);if(option){$('option-underlying').value=option.value;autoPickUnderlying=false}}}
   enableTableSorting(document.querySelector('.table-wrap table'));
   tips.decorate();
   document.querySelectorAll('[data-days]').forEach(button=>button.onclick=()=>{const [min,max]=button.dataset.days.split(',');$('min-days').value=min;$('max-days').value=max;apply()});
-  $('pick-dom').onclick=()=>{$('min-days').value=0;$('max-days').value=10;$('option-side').value='all';$('option-role').value='all';$('align-mode').value='aligned';$('option-sort').value='trade';if(!$('min-score').value)$('min-score').value='50';apply()};
+  $('pick-dom').onclick=()=>{$('min-days').value=0;$('max-days').value=10;$('option-side').value='all';$('option-role').value='all';$('align-mode').value='aligned';$('option-sort').value='trade';$('option-underlying').value='all';autoPickUnderlying=false;if(!$('min-score').value)$('min-score').value='50';apply()};
   $('option-sort').onchange=apply;$('min-score').onchange=apply;$('option-side').onchange=apply;$('option-role').onchange=apply;$('align-mode').onchange=apply;
+  $('option-underlying').onchange=()=>{autoPickUnderlying=false;apply()};
   toolbar=await mountToolbar();$('apply-options').onclick=apply;await apply();
-  $('option-code').onchange=()=>{$('option-detail').hidden=true;$('option-underlying-chart').replaceChildren();apply()};
+  $('option-code').onchange=()=>{$('option-detail').hidden=true;$('option-underlying-chart').replaceChildren();populateUnderlying();autoPickUnderlying=true;apply()};
   $('refresh-options').onclick=async()=>{try{await api('/api/options/refresh',{asof:data.asof});toolbar.watch()}catch(error){$('option-error').textContent=error.message}};
   $('close-option-detail').onclick=()=>{++detailRequest;$('option-detail').hidden=true};
   $('export-options').onclick=()=>{const fields=['ts_code','underlying_code','call_put','exercise_price','maturity_date','days_to_expiry','premium','premium_per_lot','vol','oi','iv_reference','average_iv','iv_sample_count','hv20','moneyness_pct','status'];const extra=row=>{const tb=row.tradability||{},s=tb.scenario||{};return [tb.eligible??'',tb.recommendable??'',tb.score??'',tb.raw_score??'',tb.grade??'',tb.signal_level??'',s.conservative_rr??'',s.target_underlying??'',s.stop_underlying??'',s.target_prices?.conservative??'',s.target_prices?.base??'',s.target_prices?.optimistic??'',(tb.block_reasons||[]).join(' '),(tb.recommendation_reasons||[]).join(' '),(tb.warnings||[]).join(' '),(tb.tags||[]).join(' '),tb.phase??'']};const header=[...fields,'eligible','recommendable','tradability_score','raw_score','tradability_grade','signal_level','conservative_rr','target_underlying','stop_underlying','target_option_iv90','target_option_iv100','target_option_iv110','block_reasons','recommendation_reasons','warnings','tradability_tags','underlying_phase'];download(`期权观察-${data.asof}.csv`,'\ufeff'+[header.join(','),...filtered.map(row=>[...fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`),...extra(row).map(v=>`"${String(v).replaceAll('"','""')}"`)].join(','))].join('\r\n'),'text/csv;charset=utf-8')};
