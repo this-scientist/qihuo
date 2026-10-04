@@ -326,6 +326,7 @@ def unify_records(records, decisions):
     by_code = {row['ts_code']: row for row in decisions}
     fields = ['decision_side', 'decision_direction', 'trend_direction', 'trend_model',
               'dir_score', 'trend_state', 'trend_state_label', 'trend_state_reason',
+              'market_cycle_phase', 'market_cycle_label', 'market_cycle_reason',
               'structure_direction', 'structure_score', 'structure_confirm', 'structure_evidence',
               'rps_accel', 'burst_score', 'burst_coverage', 'phase', 'phase_reason', 'phase_age', 'state_v2',
               'ema20_direction', 'ema20_strength', 'ema20_slope5_atr', 'ema20_distance_atr',

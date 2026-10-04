@@ -82,6 +82,8 @@ class DecisionV2Tests(unittest.TestCase):
         self.assertEqual(decision['decision_side'], 'long')
         self.assertEqual(decision['state_v2'], 'TREND')
         self.assertEqual(decision['trend_state'], 'T4')
+        self.assertEqual(decision['market_cycle_phase'], 'BROAD_CHANNEL')
+        self.assertEqual(decision['market_cycle_label'], '宽通道')
         self.assertEqual(decision['trend_option_gate'], 'CONDITIONAL')
         self.assertEqual(decision['option_action'], 'Call')
         self.assertEqual(decision['ema20_direction'], 'rising')
@@ -131,6 +133,8 @@ class DecisionV2Tests(unittest.TestCase):
         self.assertGreaterEqual(decision['start_score'], 70)
         self.assertEqual(decision['state_v2'], 'START')
         self.assertEqual(decision['trend_state'], 'T2')
+        self.assertEqual(decision['market_cycle_phase'], 'BREAKOUT_SPIKE')
+        self.assertEqual(decision['market_cycle_label'], '突破尖峰')
         self.assertEqual(decision['trend_transition'], 'T1→T2')
         self.assertEqual(decision['candidate_tier'], 'ACTIVE')
 

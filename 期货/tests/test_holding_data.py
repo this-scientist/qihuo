@@ -283,6 +283,7 @@ class HoldingCollectionTests(unittest.TestCase):
         store.root = Path('test-root')
         store.lock = threading.RLock()
         store.job = {'status': 'queued'}
+        store.active = DATE
         store.phase = object()
         store.payloads = {}
         store.option_cache = {}
@@ -293,7 +294,8 @@ class HoldingCollectionTests(unittest.TestCase):
                 patch('focused.run_focused', return_value={
                     'published_days': [DATE], 'partial_days': []}), \
                 patch('holding_data.collect_update_holdings') as collect, \
-                patch('history.prepare_history'), \
+                patch('history.prepare_history_fast', return_value={
+                    'prepared': [], 'exclusions': [], 'incremental_prepared': 0, 'full_rebuild_count': 0}), \
                 patch('research_server.read_csv', return_value=pd.DataFrame()), \
                 patch('research_server.build_payload', return_value=payload), \
                 patch('research_server.publish_snapshot', return_value=payload), \
@@ -303,6 +305,7 @@ class HoldingCollectionTests(unittest.TestCase):
         collect.assert_called_once_with(
             collector, store.root/'updates'/DATE, DATE, False)
         self.assertEqual(store.job['status'], 'success')
+        self.assertEqual(store.job['history']['mode'], 'full')
 
     def test_research_update_does_not_fail_when_holding_collection_fails(self):
         with patch.dict(os.environ, {
@@ -318,6 +321,7 @@ class HoldingCollectionTests(unittest.TestCase):
         store.root = Path('test-root')
         store.lock = threading.RLock()
         store.job = {'status': 'queued'}
+        store.active = DATE
         store.phase = object()
         store.payloads = {}
         store.option_cache = {}
@@ -328,7 +332,8 @@ class HoldingCollectionTests(unittest.TestCase):
                 patch('focused.run_focused', return_value={
                     'published_days': [DATE], 'partial_days': []}), \
                 patch('holding_data.collect_update_holdings', side_effect=RuntimeError('adapter bug')), \
-                patch('history.prepare_history'), \
+                patch('history.prepare_history_fast', return_value={
+                    'prepared': [], 'exclusions': [], 'incremental_prepared': 0, 'full_rebuild_count': 0}), \
                 patch('research_server.read_csv', return_value=pd.DataFrame()), \
                 patch('research_server.build_payload', return_value=payload), \
                 patch('research_server.publish_snapshot', return_value=payload), \

@@ -4,12 +4,15 @@ import {enableTableSorting} from './sortable.mjs';
 import {buildOpportunityRows,ema20Summary,reminderDisplay} from './opportunity-workbench.mjs';
 import {renderHoldings} from './holdings.mjs';
 import {orderedDetailRows,adjacentDetailRow,wheelStep,ignoresDetailShortcut} from './detail-navigation.mjs';
+import {ema20 as priceActionEma20,evaluatePriceAction} from './price-action-strategies.mjs';
+import {buildEntryHint,buildSignalMatrix,frameLabel} from './signal-matrix.mjs';
 
 const $=id=>document.getElementById(id);
 const app=$('app');
-const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionContract:'auto',optionChain:null,search:'',detailSearch:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{}};
+const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionContract:'auto',optionChain:null,search:'',detailSearch:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{},chartFrame:'daily'};
 let data;
 let klineModalController=null;
+let klineRequest=0;
 let detailWheelAt=0;
 const detailCollapsedGroups=new Set();
 
@@ -39,8 +42,8 @@ const TERM_TIPS={
  accel:'RPS20今日值减去5个交易日前的值，单位为百分点；是五日变化，不是数学二阶加速度。',
  burst:'标的爆发指数0~100：突破25、方向RPS变化20、ADX增量20、ATR扩张15、量比10、OI增幅10。缺失不补分，不是胜率或期权收益预测。',
  option:'期权动作：方向、启动和商品结构同时通过时才提示可做；否则显示不做。',
- trend:'趋势状态：T0无趋势、T1酝酿、T2启动、T3加速、T4延续、T5衰竭。',
- transition:'状态迁移：用当前证据近似标记从观察到启动、从启动到加速、或从延续到衰竭的变化。',
+ trend:'市场周期：交易区间、突破尝试、突破尖峰、紧密通道、宽通道、趋势末端。用于描述趋势生命周期。',
+ transition:'周期迁移：用当前证据近似标记从平衡到突破、从突破到通道、或从趋势延续到末端的变化。',
  delta:'Delta：标的价格变动1元时，期权理论价格大约变化多少。',
  strike:'行权价：期权到期时可按该价格买入或卖出标的的价格。',
  adx:'趋势强度：衡量趋势是否有力度，不直接代表方向。',
@@ -108,6 +111,8 @@ function execMetrics(row){
 }
 const term=(label,key)=>`${label}<span class="term-tip" title="${TERM_TIPS[key]}">?</span>`;
 const stateText=value=>STATE_LABELS[value]||value||'等待';
+const cycleLabel=row=>row?.market_cycle_label||row?.trend_state_label||'—';
+const cycleReason=row=>row?.market_cycle_reason||row?.trend_state_reason||'暂无阶段说明。';
 const directionText=value=>DIRECTION_LABELS[value]||value||'—';
 const optionActionText=value=>OPTION_ACTION_LABELS[value]||value||'—';
 const optionGateText=value=>OPTION_GATE_LABELS[value]||value||'—';
@@ -115,6 +120,12 @@ const structureText=value=>STRUCTURE_LABELS[value]||value||'—';
 const signalClass=row=>row.signal_side==='long'?'up':row.signal_side==='short'?'down':'muted';
 const rows=()=>data.decisions||data.records||[];
 const codeOf=row=>row.ts_code;
+const hasMeasuredMove=row=>data?.measured_moves?.[codeOf(row)]?.has_move===true;
+const measuredMoveTitle=row=>{
+ const moves=data?.measured_moves?.[codeOf(row)]?.moves||[];
+ if(!moves.length)return 'Measured Move 目标位';
+ return 'Measured Move：'+moves.map(m=>`${m.direction==='long'?'多头':'空头'} 目标 ${m.target_price}（Leg3 已走 ${m.leg3_progress_pct}%）`).join('；');
+};
 const isLong=row=>row.decision_side==='long'||row.decision_direction==='LONG';
 const isShort=row=>row.decision_side==='short'||row.decision_direction==='SHORT';
 const directionClass=row=>isLong(row)?'up':isShort(row)?'down':'muted';
@@ -163,7 +174,7 @@ function ema20Inline(row){const e=ema20Summary(row);return `<strong class="ema20
 function ema20Assessment(row){const e=ema20Summary(row);return `<div class="ema20-assessment state-${e.status}"><div><span>EMA20判断</span><strong>${e.label}</strong></div><div><span>方向 / 强弱</span><strong>${e.direction} / ${e.strength}</strong></div><div><span>五日趋势</span><strong>${e.slope}</strong></div><div><span>当前距离</span><strong>${e.distance}</strong></div><p>${escapeHtml((row.ema20_actionability_reasons||[]).join('；')||e.reason)}</p></div>`}
 function decisionTable(source,limit=80,compact=false){
  const body=sortedRows(source).slice(0,limit).map(row=>`<tr data-code="${codeOf(row)}">
-  <td><strong>${row.name}</strong><span class="contract">${row.main_code||codeOf(row)}</span></td>
+  <td><strong>${row.name}</strong><span class="contract">${row.main_code||codeOf(row)}</span>${hasMeasuredMove(row)?`<span class="mm-badge" title="${escapeHtml(measuredMoveTitle(row))}">M</span>`:''}</td>
   <td class="${directionClass(row)}">${directionText(row.decision_side)}</td>
   <td>${ema20Inline(row)}</td>
   <td class="${row.structure_direction==='long'?'up':row.structure_direction==='short'?'down':'muted'}">${directionText(row.structure_direction)}<span class="contract">${structureText(row.structure_confirm)}</span></td>
@@ -176,7 +187,7 @@ function decisionTable(source,limit=80,compact=false){
   <td class="${tone(row.rps_accel)}">${signed(row.rps_accel)}</td>
   <td class="${sectorClass(row)}" data-sort="${row.sector_strength??''}" title="${row.sector_counter?'该品种方向与大类方向相反：负分代表反向强度，越负越强':''}">${signed(row.sector_strength)}<span class="contract">${sectorNote(row)}</span></td>
   <td class="${dirScore(row)>0?'up':dirScore(row)<0?'down':''}">${signed(row.dir_score)}</td>
-  <td>${row.trend_state_label||'—'}</td>
+  <td>${cycleLabel(row)}</td>
   <td class="${signalClass(row)}">${row.signal_label||'—'}<span class="contract">${row.today_support!=null&&row.today_resistance!=null?`支 ${fmt(row.today_support)} / 阻 ${fmt(row.today_resistance)}`:'—'}</span></td>
   <td title="因子覆盖 ${fmt(row.burst_coverage)}%">${fmt(row.burst_score)}</td>
   <td>${count(row.main_oi)}</td><td>${count(row.pair_oi)}</td>
@@ -187,7 +198,7 @@ function decisionTable(source,limit=80,compact=false){
   <td>${signed(row.structure_score)}<span class="contract">覆盖 ${fmt(row.structure_evidence?.group_coverage)}%</span></td>
   <td><button class="mini-action" data-action="options" data-code="${codeOf(row)}">T型</button></td>
  </tr>`).join('');
- return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>EMA20判断</th><th>结构方向</th><th>${term('当日%','day')}</th><th>${term('实时价','quote')}</th><th>${term('可执行性','exec')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('大类内强度','sector')}</th><th>${term('趋势得分','dir')}</th><th>${term('趋势阶段','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="25" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
+ return `<div class="table-wrap overview-table"><table class="decision-table"><thead><tr><th>品种 / 主力</th><th>趋势方向</th><th>EMA20判断</th><th>结构方向</th><th>${term('当日%','day')}</th><th>${term('实时价','quote')}</th><th>${term('可执行性','exec')}</th><th>5日%</th><th>20日%</th><th>${term('RPS5','rps')}</th><th>${term('RPS20','rps')}</th><th>${term('RPS加速度','accel')}</th><th>${term('大类内强度','sector')}</th><th>${term('趋势得分','dir')}</th><th>${term('市场周期','trend')}</th><th>技术信号</th><th>${term('爆发指数','burst')}</th><th>主力持仓</th><th>主次OI</th><th>${term('OI 5日%','oi')}</th><th>跨期价差</th><th>期限结构</th><th>大类</th><th>结构得分</th><th>期权</th></tr></thead><tbody>${body||'<tr><td colspan="25" class="empty">暂无匹配品种</td></tr>'}</tbody></table></div>`;
 }
 function filteredRows(){return rows().filter(row=>(state.sector==='all'||row.sector===state.sector)&&(state.side==='all'||row.decision_side===state.side)&&(state.stage==='all'||row.state_v2===state.stage)&&`${row.name} ${row.ts_code} ${row.main_code}`.toLowerCase().includes(state.search.toLowerCase()))}
 const QUEUE_META={
@@ -229,7 +240,7 @@ function renderCandidates(){
 }
 function metricBlocks(row){
  const ema=ema20Summary(row);
- const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['趋势阶段',row.trend_state_label],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
+ const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['市场周期',cycleLabel(row)],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}<div class="quote-metrics" data-intraday="${contractOf(row)}">${quoteMetrics(row)}${execMetrics(row)}</div></div>`;
 }
 const detailStatusLabel=row=>({actionable:'可做',wait_pullback:'等回踩',do_not_chase:'不可追',not_actionable:'不可做'}[row.ema20_actionability]||'不可做');
@@ -245,7 +256,7 @@ function detailSidebar(selected){
  const body=groups.map(group=>{
   const items=group.items.map(item=>{
    const ema=ema20Summary(item);const active=codeOf(item)===currentCode;
-   return `<button type="button" class="detail-symbol${active?' active':''}" data-detail-code="${codeOf(item)}" aria-current="${active?'true':'false'}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(codeOf(item))} · ${ema.direction}·${ema.strength}</small></span><em>${detailStatusLabel(item)}</em></button>`;
+   return `<button type="button" class="detail-symbol${active?' active':''}" data-detail-code="${codeOf(item)}" aria-current="${active?'true':'false'}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(codeOf(item))} · ${ema.direction}·${ema.strength}</small></span><em>${detailStatusLabel(item)}${hasMeasuredMove(item)?`<span class="mm-badge" title="${escapeHtml(measuredMoveTitle(item))}">M</span>`:''}</em></button>`;
   }).join('');
   const hasActive=group.items.some(item=>codeOf(item)===currentCode);
   const open=!detailCollapsedGroups.has(group.label)||hasActive;
@@ -294,6 +305,32 @@ function structurePanel(row){
  const items=[['结构得分',signed(row.structure_score)],['趋势 / 结构',structureText(row.structure_confirm)],['期限形态',structureText(row.structure)],['年化Carry',pct(row.carry_annualized)],['近月 / 远月',`${row.near_code||'—'} / ${row.far_code||'—'}`],['跨期价差',signed(row.spread)],['价差5日变化（价格单位）',signed(row.spread_change5)],['Carry 5日变化（百分点）',signed(row.carry_change5)],['有效因子组',`${row.structure_evidence?.effective_groups??0} / 4`],['现货 / 库存',`${row.structure_evidence?.basis?.status==='ok'?'有现货':'现货缺失'} / ${row.structure_evidence?.inventory?.status==='ok'?'有库存':'库存缺失'}`]];
  return `<article class="decision-panel detail-structure"><h2>商品结构 · ${directionText(row.structure_direction)}</h2><div class="structure-grid">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value}</strong></div>`).join('')}</div></article>`;
 }
+function detailPriceAction(row){
+ const input=chartInput(row);
+ return evaluatePriceAction(input);
+}
+function signalMatrixHtml(row,priceAction=detailPriceAction(row),frame=state.chartFrame){
+ const matrix=buildSignalMatrix(row,{priceAction,execution:execOf(row)});
+ return `<div class="section-heading"><div><h2>信号冲突矩阵</h2><div class="muted small">${frameLabel(frame)}口径；模块分开展示，只解释一致性，不改写当前评分。</div></div></div><div class="signal-matrix">${matrix.map(item=>`<div class="signal-module ${item.stance}"><span>${item.label}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.detail)}</small></div>`).join('')}</div>`;
+}
+function signalMatrixPanel(row){
+ return `<article id="signal-matrix-panel" class="decision-panel signal-matrix-panel">${signalMatrixHtml(row)}</article>`;
+}
+function updateSignalMatrix(row,priceAction,frame=state.chartFrame){
+ const panel=$('signal-matrix-panel');
+ if(panel)panel.innerHTML=signalMatrixHtml(row,priceAction,frame);
+}
+function entryHintHtml(row,priceAction=detailPriceAction(row),frame=state.chartFrame){
+ const hint=buildEntryHint(row,{frame,priceAction});
+ return `<div class="section-heading"><div><h2>多周期入场提示</h2><div class="muted small">日线定方向，分钟线只做盘中入场确认，不参与评分。</div></div></div><div class="entry-hint ${hint.stance}"><strong>${escapeHtml(hint.title)}</strong><span>${escapeHtml(hint.detail)}</span></div>`;
+}
+function entryHintPanel(row){
+ return `<article id="entry-hint-panel" class="decision-panel entry-hint-panel">${entryHintHtml(row)}</article>`;
+}
+function updateEntryHint(row,priceAction,frame=state.chartFrame){
+ const panel=$('entry-hint-panel');
+ if(panel)panel.innerHTML=entryHintHtml(row,priceAction,frame);
+}
 function klineDialog(row){
  return `<dialog id="kline-modal" class="kline-modal" aria-labelledby="kline-modal-title"><div class="kline-modal-shell">
   <header class="kline-modal-header"><div><span class="eyebrow">INTERACTIVE CHART</span><h2 id="kline-modal-title">${row.name} · 日线结构</h2><p>滚轮缩放 · 横向拖动 · 双击复位 · 拖动红绿虚线校正价位</p></div><div class="kline-modal-actions"><button type="button" data-chart-zoom-out aria-label="缩小时间范围">−</button><button type="button" data-chart-reset>重置视图</button><button type="button" data-chart-zoom-in aria-label="放大时间范围">＋</button><button type="button" data-reset-levels>恢复系统价位</button><button type="button" class="modal-close" data-close-kline aria-label="关闭">×</button></div></header>
@@ -309,10 +346,12 @@ function renderDetail(){
   ${detailSidebar(row)}
   <div class="detail-main">
    <header class="detail-instrument"><div><h2>${escapeHtml(row.name)}</h2><span>${codeOf(row)} · ${row.main_code||'—'}${row.secondary_code?` / ${row.secondary_code}`:''}</span></div><div class="detail-instrument-state"><strong>${detailStatusLabel(row)}</strong><span>${ema.direction} · ${ema.strength}</span></div><button type="button" data-jump-options="${codeOf(row)}">查看T型报价</button></header>
-   <article class="detail-chart-stage"><div class="section-heading"><div><h2>日线 K 线 / EMA20</h2><div class="muted small">普通滚轮切换品种 · Ctrl + 滚轮缩放（锚点为鼠标位置） · 横向拖动平移 · 红色压力 · 绿色支撑</div></div><button type="button" data-open-kline>全屏查看</button></div><div id="single-chart" class="detail-primary-chart" tabindex="0" aria-label="可缩放EMA20日线K线图：普通滚轮切换品种，Ctrl加滚轮缩放"></div></article>
+   <article class="detail-chart-stage"><div class="section-heading"><div><h2>K 线 / EMA20</h2><div class="muted small" id="kline-context">日线用于收盘决策；分钟线来自新浪公开主连，仅作盘中参考。</div></div><div class="mode-tabs intraday-frame-tabs">${[['daily','日线'],['5','5m'],['15','15m'],['30','30m'],['60','60m']].map(([frame,label])=>`<button type="button" data-chart-frame="${frame}" class="${state.chartFrame===frame?'active':''}">${label}</button>`).join('')}</div><span id="kline-meta" class="muted small">正在读取…</span><button type="button" data-open-kline ${state.chartFrame==='daily'?'':'hidden'}>全屏查看</button></div><div id="single-chart" class="detail-primary-chart" tabindex="0" aria-label="可缩放K线图"></div></article>
+   ${signalMatrixPanel(row)}
+   ${entryHintPanel(row)}
    ${ema20Assessment(row)}
    <section class="detail-analysis-grid">
-    <article class="decision-panel detail-actionability"><h2>可做性与价格位置</h2>${metricBlocks(row)}<p class="phase-rationale">${row.trend_state_reason||'暂无阶段说明。'}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / EMA20',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
+    <article class="decision-panel detail-actionability"><h2>可做性与价格位置</h2>${metricBlocks(row)}<p class="phase-rationale">${cycleReason(row)}</p><div class="factor-contributions">${Object.entries(row.trend_components||{}).map(([key,value])=>`<span>${{price:'价格 / EMA20',momentum:'绝对动量',di:'DI / ADX'}[key]} <strong class="${tone(value)}">${signed(value)}</strong></span>`).join('')}</div></article>
     ${holdingPanel(row)}
     ${structurePanel(row)}
    </section>
@@ -406,7 +445,7 @@ function optionContextPanel(row,chain){
  const picks=optionCandidates(row,chain);
  const gate=row.trend_option_gate;
  const gateText=row.structure_confirm==='CONFLICT'?'价格趋势与商品结构背离。':gate==='BLOCK'?'当前阶段不新开仓。':gate==='CONDITIONAL'?'趋势延续，等待回调。':gate==='WATCH'?'趋势酝酿，等待确认。':'趋势窗口已通过。';
- return `<div class="option-workbench"><section class="underlying-state"><div><span>标的趋势 / 得分</span><strong>${directionText(row.decision_side)} · ${signed(row.dir_score)}</strong><small>${row.trend_state_label||'无趋势'} · ${gateText}</small></div><div><span>商品结构 / 期权动作</span><strong>${directionText(row.structure_direction)} · ${optionActionText(row.option_action)}</strong><small>RPS5 ${fmt(row.rps5)} · RPS20 ${fmt(row.rps20)} · ADX ${fmt(row.adx)} · OI 5日 ${pct(row.oi_change5)}</small></div></section><section class="recommend-panel"><h3>系统候选</h3>${picks.length?picks.map((item,index)=>{const tb=item.tradability||{},s=tb.scenario||{};return `<div class="recommend-card"><span>${tb.signal_level||recommendationType(item,index)} · ${recommendationType(item,index)}</span><strong>${item.ts_code}</strong><small>分 ${tb.score??'—'} · 保守盈亏比 ${fmt(s.conservative_rr)} · 标的目标/止损 ${fmt(s.target_underlying)}/${fmt(s.stop_underlying)}</small><small>期权目标价(0.9×IV) ${fmt(s.target_prices?.conservative)} · Delta ${fmt(item.delta)} · DTE ${item.days_to_expiry} · 量/仓 ${fmt(item.vol)}/${fmt(item.oi)}</small></div>`}).join(''):'<div class="empty mini">当前无量仓合格、情景盈亏比合格且综合分达标的期权候选。</div>'}</section></div>`;
+ return `<div class="option-workbench"><section class="underlying-state"><div><span>标的趋势 / 得分</span><strong>${directionText(row.decision_side)} · ${signed(row.dir_score)}</strong><small>${cycleLabel(row)} · ${gateText}</small></div><div><span>商品结构 / 期权动作</span><strong>${directionText(row.structure_direction)} · ${optionActionText(row.option_action)}</strong><small>RPS5 ${fmt(row.rps5)} · RPS20 ${fmt(row.rps20)} · ADX ${fmt(row.adx)} · OI 5日 ${pct(row.oi_change5)}</small></div></section><section class="recommend-panel"><h3>系统候选</h3>${picks.length?picks.map((item,index)=>{const tb=item.tradability||{},s=tb.scenario||{};return `<div class="recommend-card"><span>${tb.signal_level||recommendationType(item,index)} · ${recommendationType(item,index)}</span><strong>${item.ts_code}</strong><small>分 ${tb.score??'—'} · 保守盈亏比 ${fmt(s.conservative_rr)} · 标的目标/止损 ${fmt(s.target_underlying)}/${fmt(s.stop_underlying)}</small><small>期权目标价(0.9×IV) ${fmt(s.target_prices?.conservative)} · Delta ${fmt(item.delta)} · DTE ${item.days_to_expiry} · 量/仓 ${fmt(item.vol)}/${fmt(item.oi)}</small></div>`}).join(''):'<div class="empty mini">当前无量仓合格、情景盈亏比合格且综合分达标的期权候选。</div>'}</section></div>`;
 }
 async function renderOptions(){
  const row=selectedRow();
@@ -450,14 +489,55 @@ function sectorSeries(sector){
  return points[0].map((point,index)=>[point[0],points.reduce((sum,values)=>sum+values[index][1]/values[0][1]*100,0)/points.length]);
 }
 function renderSingleChart(row){
- if(!data.candles?.[codeOf(row)])return;
- renderCandlestickChart($('single-chart'),chartInput(row),{
+ const host=$('single-chart'),meta=$('kline-meta'),context=$('kline-context'),request=++klineRequest;
+ if(!host||!meta)return;
+ if(state.chartFrame!=='daily'){renderMinuteChart(row,request);return}
+ if(context)context.textContent='日线用于收盘决策；普通滚轮切换品种，Ctrl+滚轮缩放，横向拖动平移。';
+ meta.textContent='收盘日线';
+ if(!data.candles?.[codeOf(row)]){host.innerHTML='<div class="empty">暂无日线K线</div>';return}
+ const input=chartInput(row),priceAction=evaluatePriceAction(input);
+ updateSignalMatrix(row,priceAction,'daily');
+ updateEntryHint(row,priceAction,'daily');
+ renderCandlestickChart(host,{...input,signals:[...(input.signals||[]),...priceAction.signals]},{
   window:Number($('window')?.value||60),
   title:`${row.name}日线K线、成交量与持仓量`,
   interactive:true,fitHeight:true,
   wheelMode:'navigate',onNavigate:navigateDetailWheelStep,
   onLevelChange:levels=>saveManualLevels(row,levels),
  });
+}
+async function renderMinuteChart(row,request){
+ const host=$('single-chart'),meta=$('kline-meta'),context=$('kline-context'),contract=contractOf(row);
+ if(!host||!meta)return;
+ if(!contract){host.innerHTML='<div class="empty">暂无主力合约</div>';meta.textContent='无合约';return}
+ if(context)context.textContent='分钟线来自新浪公开主连，仅作盘中参考；不参与评分、快照或收盘决策。';
+ host.innerHTML='<div class="empty">正在读取分钟K线…</div>';meta.textContent=contract;
+ const loadingAction={signals:[],unavailable:true,reason:'正在读取分钟 K 线'};
+ updateSignalMatrix(row,loadingAction,state.chartFrame);
+ updateEntryHint(row,loadingAction,state.chartFrame);
+ try{
+  await new Promise(resolve=>setTimeout(resolve,MINUTE_REQUEST_DELAY_MS));
+  if(request!==klineRequest||state.view!=='detail'||contractOf(selectedRow())!==contract)return;
+  const result=await api(`/api/intraday/5m?code=${encodeURIComponent(contract)}&freq=${encodeURIComponent(state.chartFrame)}${asofQuery()?'&'+asofQuery():''}`);
+  if(request!==klineRequest||state.view!=='detail'||contractOf(selectedRow())!==contract)return;
+  if(result.error||!result.bars?.length){
+   const unavailable={signals:[],unavailable:true,reason:result.error||'暂无分钟K线'};
+   updateSignalMatrix(row,unavailable,state.chartFrame);
+   updateEntryHint(row,unavailable,state.chartFrame);
+   host.innerHTML=`<div class="empty">${escapeHtml(result.error||'暂无分钟K线')}</div>`;meta.textContent=`${contract} · ${result.symbol||'—'} · ${result.cached?'缓存':'实时'} · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;return
+  }
+  meta.textContent=`${contract} · 新浪 ${result.symbol} · ${result.freq} · ${result.count}根 · ${result.cached?'缓存':'实时'} · ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+  const moving={ema20:priceActionEma20(result.bars)},priceAction=evaluatePriceAction({candles:result.bars,moving});
+  updateSignalMatrix(row,priceAction,state.chartFrame);
+  updateEntryHint(row,priceAction,state.chartFrame);
+  renderCandlestickChart(host,{candles:result.bars,moving,signals:priceAction.signals,levels:[],measuredMoves:[]},{window:72,title:`${row.name} ${result.freq} K线`,interactive:false,activity:true,fitHeight:true});
+ }catch(error){
+  if(request!==klineRequest)return;
+  const unavailable={signals:[],unavailable:true,reason:error.message};
+  updateSignalMatrix(row,unavailable,state.chartFrame);
+  updateEntryHint(row,unavailable,state.chartFrame);
+  host.innerHTML=`<div class="empty">${escapeHtml(error.message)}</div>`;meta.textContent='读取失败';
+ }
 }
 function chartLevels(row){
  const manual=state.manualLevels[codeOf(row)]||{};
@@ -467,7 +547,7 @@ function chartLevels(row){
  ];
 }
 function chartInput(row){
- return {candles:data.candles[codeOf(row)]||[],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[],levels:chartLevels(row)};
+ return {candles:data.candles[codeOf(row)]||[],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[],levels:chartLevels(row),measuredMoves:data.measured_moves?.[codeOf(row)]?.moves||[]};
 }
 function saveManualLevels(row,levels){
  state.manualLevels[codeOf(row)]=Object.fromEntries(levels.map(level=>[level.id,level.value]));
@@ -555,6 +635,10 @@ function wireView(){
    const item=rows().find(r=>codeOf(r)===button.dataset.detailCode);
    if(item){state.selected=codeOf(item);render();button.blur()}
   }));
+  document.querySelectorAll('[data-chart-frame]').forEach(button=>button.addEventListener('click',()=>{
+   state.chartFrame=button.dataset.chartFrame;
+   render();
+  }));
   document.querySelector('[data-open-kline]')?.addEventListener('click',()=>openKlineModal(detailRow));
   document.querySelector('[data-close-kline]')?.addEventListener('click',closeKlineModal);
   document.querySelector('[data-chart-zoom-in]')?.addEventListener('click',()=>klineModalController?.zoomIn());
@@ -580,10 +664,11 @@ function wireRows(){
  }));
 }
 function csvFor(source){
- const fields=['ts_code','name','sector','main_code','decision_direction','signal_label','today_support','today_resistance','tomorrow_breakout','tomorrow_reversal','day_change','return1','return5','return20','rps5','rps20','rps_accel','dir_score','trend_state_label','burst_score','burst_coverage','main_oi','secondary_oi','pair_oi','oi_change5','oi_change20','volume_ratio','near_code','far_code','spread','spread_change5','structure','carry_annualized','carry_change5','structure_direction','structure_score','structure_confirm','option_action'];
+ const fields=['ts_code','name','sector','main_code','decision_direction','signal_label','today_support','today_resistance','tomorrow_breakout','tomorrow_reversal','day_change','return1','return5','return20','rps5','rps20','rps_accel','dir_score','market_cycle_label','trend_state_label','burst_score','burst_coverage','main_oi','secondary_oi','pair_oi','oi_change5','oi_change20','volume_ratio','near_code','far_code','spread','spread_change5','structure','carry_annualized','carry_change5','structure_direction','structure_score','structure_confirm','option_action'];
  return '\ufeff'+[fields.join(','),...source.map(row=>fields.map(key=>`"${String(row[key]??'').replaceAll('"','""')}"`).join(','))].join('\r\n');
 }
 const QUOTE_REFRESH_MS=30000;
+const MINUTE_REQUEST_DELAY_MS=180;
 let quoteTimer=null;
 function inTradingSession(){
  const now=new Date(),minutes=now.getHours()*60+now.getMinutes();

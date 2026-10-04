@@ -5,6 +5,8 @@ const element=(tag,attrs={},text)=>{const node=document.createElementNS(NS,tag);
 const dateTime=date=>Date.UTC(+date.slice(0,4),+date.slice(4,6)-1,+date.slice(6,8));
 const shortDate=time=>new Date(time).toISOString().slice(5,10);
 const number=(value,price)=>price?value.toFixed(1):`${value>=0?'+':''}${value.toFixed(2)}%`;
+export const candleTickLabel=stamp=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(String(stamp))?String(stamp).slice(11,16):shortDate(dateTime(String(stamp)));
+export const candleTooltipDate=stamp=>/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(String(stamp))?String(stamp).slice(0,16):`${String(stamp).slice(0,4)}-${String(stamp).slice(4,6)}-${String(stamp).slice(6)}`;
 
 // 滚轮意图：navigate 模式下普通滚轮交给外层做商品切换，Ctrl+滚轮（及 zoom 模式）缩放时间窗口。
 export function klineWheelIntent({deltaY=0,ctrlKey=false}={},mode='zoom'){
@@ -133,7 +135,7 @@ export function renderChart(container,input,{window=60,price=false,priceLabel='�
  draw();const observer=new ResizeObserver(draw);observer.observe(surface);observers.set(container,observer);
 }
 
-export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange,wheelMode='zoom',onNavigate,fitHeight=false}={}){
+export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[],measuredMoves=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange,wheelMode='zoom',onNavigate,fitHeight=false}={}){
  observers.get(container)?.disconnect();container.replaceChildren();
  const allRows=candles.filter(row=>row.length>=5&&row.slice(1,5).every(Number.isFinite));
  if(allRows.length<2){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无可展示的K线';container.appendChild(empty);return null}
@@ -152,6 +154,11 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   const key=document.createElement('span');key.className='chart-key';key.dataset.kind=item.kind;const swatch=document.createElement('i');swatch.style.borderColor=item.color;key.append(swatch,document.createTextNode(item.label));legend.appendChild(key);
  }
  const gapKey=document.createElement('span');gapKey.className='chart-key ema-gap';gapKey.append(document.createElement('i'),document.createTextNode('EMA20间隔区（连续>20根未触碰）'));legend.appendChild(gapKey);
+  if(measuredMoves&&measuredMoves.length){
+   const mmKey=document.createElement('span');mmKey.className='chart-key mm-key';
+   const swatch=document.createElement('i');swatch.className='mm-swatch';
+   mmKey.append(swatch,document.createTextNode('Measured Move 目标位'));legend.appendChild(mmKey);
+  }
  for(const level of priceLevels){
   const key=document.createElement('span');key.className=`chart-key level-${level.kind}`;key.dataset.levelLegend=level.id;const swatch=document.createElement('i');key.append(swatch,document.createTextNode(`${level.label} ${level.value.toFixed(2)}`));legend.appendChild(key);
  }
@@ -177,11 +184,19 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   lastLayout={width,plotW,left};
   for(const level of priceLevels){const item=legend.querySelector(`[data-level-legend="${level.id}"]`);if(item)item.lastChild.textContent=`${level.label} ${level.value.toFixed(2)}`}
   const visibleDates=new Set(rows.map(row=>row[0])),visibleSignals=signals.filter(signal=>visibleDates.has(signal.trade_date));
+  const signalsByDate=new Map();
+  for(const signal of visibleSignals){
+   const list=signalsByDate.get(signal.trade_date)||[];
+   list.push(signal);signalsByDate.set(signal.trade_date,list);
+  }
+  // 只保留 A/B/C 三点都在可见窗口内的 measured move
+  const visibleMoves=(measuredMoves||[]).map(mm=>({...mm,aIdx:rows.findIndex(row=>row[0]===mm.leg1_start_date),bIdx:rows.findIndex(row=>row[0]===mm.leg1_end_date),cIdx:rows.findIndex(row=>row[0]===mm.pullback_end_date)})).filter(mm=>mm.aIdx>=0&&mm.bIdx>=0&&mm.cIdx>=0);
   const overlaySeries=overlayDefinitions.map(item=>({...item,values:item.values.slice(range.start,range.start+range.count)}));
   const basePrices=rows.flatMap(row=>[row[2],row[3]]).concat(overlaySeries.flatMap(item=>item.values.filter(Number.isFinite))).concat(visibleSignals.map(s=>s.close).filter(Number.isFinite));
   const rawLow=Math.min(...basePrices),rawHigh=Math.max(...basePrices),rawSpan=Math.max(rawHigh-rawLow,1);
   const nearbyLevels=priceLevels.map(level=>level.value).filter(value=>value>=rawLow-rawSpan*.2&&value<=rawHigh+rawSpan*.2);
-  const minY=Math.min(...basePrices,...nearbyLevels),maxY=Math.max(...basePrices,...nearbyLevels),pad=Math.max((maxY-minY)*.08,1),lo=minY-pad,hi=maxY+pad;
+  const nearbyTargets=visibleMoves.map(mm=>Number(mm.target_price)).filter(value=>Number.isFinite(value)&&value>=rawLow-rawSpan*.2&&value<=rawHigh+rawSpan*.2);
+  const minY=Math.min(...basePrices,...nearbyLevels,...nearbyTargets),maxY=Math.max(...basePrices,...nearbyLevels,...nearbyTargets),pad=Math.max((maxY-minY)*.08,1),lo=minY-pad,hi=maxY+pad;
   const x=index=>left+plotW*(index+.5)/rows.length,y=value=>top+3+(hi-value)/(hi-lo)*(plotH-6),bodyW=Math.max(2,Math.min(13,plotW/rows.length*.58));
   svg.append(element('rect',{'data-chart-frame':'price',x:left,y:top,width:plotW,height:plotH,fill:'none',stroke:'#e2e7ee'}));
   for(let i=0;i<5;i++){const value=lo+(hi-lo)*i/4,py=y(value);svg.append(element('line',{x1:left,y1:py,x2:width-right,y2:py,stroke:'#edf0f5'}));svg.append(element('text',{x:left-8,y:py+4,'text-anchor':'end'},value.toFixed(0)))}
@@ -209,6 +224,31 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
    const points=item.values.map((value,index)=>Number.isFinite(value)?[index,value]:null).filter(Boolean);
    if(points.length>1)svg.append(element('path',{'data-series':item.id,d:points.map(([index,value],i)=>`${i?'L':'M'}${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(' '),fill:'none',stroke:item.color,'stroke-width':1.7}));
   });
+  // Measured Move 可视化：A→B→C 实线 + C→D 虚线投射 + 目标水平线
+  const yTop=top+3,yBottom=top+plotH-3;
+  for(const mm of visibleMoves){
+   const {aIdx,bIdx,cIdx}=mm;
+   const mmColor=mm.direction==='long'?'#2563eb':'#d97706';
+   const ax=x(aIdx),ay=y(mm.leg1_start_price),bx=x(bIdx),by=y(mm.leg1_end_price),cx=x(cIdx),cy=y(mm.pullback_end_price);
+   // Leg 1 + 回调实线
+   svg.append(element('path',{d:`M${ax},${ay} L${bx},${by} L${cx},${cy}`,fill:'none',stroke:mmColor,'stroke-width':1.8,opacity:.85,'data-measured-move':''}));
+   // C→D 投射虚线（投射到图表右边缘，超出可见价格区间时裁剪到边框）
+   const edgeX=width-right,rawTargetY=y(mm.target_price);
+   let endX=edgeX,endY=rawTargetY;
+   if(rawTargetY<yTop){const t=(yTop-cy)/(rawTargetY-cy);endX=cx+t*(edgeX-cx);endY=yTop}
+   else if(rawTargetY>yBottom){const t=(yBottom-cy)/(rawTargetY-cy);endX=cx+t*(edgeX-cx);endY=yBottom}
+   svg.append(element('line',{x1:cx,y1:cy,x2:endX,y2:endY,stroke:mmColor,'stroke-width':1.5,'stroke-dasharray':'6 5',opacity:.7,'data-mm-projection':''}));
+   // 目标水平线只在可见价格区间内绘制
+   if(rawTargetY>=yTop&&rawTargetY<=yBottom){
+    svg.append(element('line',{x1:left,x2:edgeX,y1:rawTargetY,y2:rawTargetY,stroke:mmColor,'stroke-width':1.2,'stroke-dasharray':'3 4',opacity:.5,'data-mm-target':''}));
+    svg.append(element('text',{x:edgeX+4,y:rawTargetY+4,fill:mmColor,'class':'mm-target-label'},`MM ${mm.target_price.toFixed(1)}`));
+   }
+   // A/B/C 标记点
+   for(const [px,py,lbl] of [[ax,ay,'A'],[bx,by,'B'],[cx,cy,'C']]){
+    svg.append(element('circle',{cx:px,cy:py,r:3,fill:mmColor,opacity:.8}));
+    svg.append(element('text',{x:px+6,y:py-6,fill:mmColor,'class':'mm-point-label'},lbl));
+   }
+  }
   visibleSignals.forEach(signal=>{
    const index=rows.findIndex(row=>row[0]===signal.trade_date);if(index<0)return;
    const isLong=signal.side==='long',px=x(index),py=y(signal.close)+(isLong?16:-12),label=element('text',{x:px,y:py,'text-anchor':'middle','class':`kline-signal ${isLong?'long':'short'}`},signal.label);
@@ -248,14 +288,18 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
    svg.append(element('text',{x:left-8,y:activityTop+10,'text-anchor':'end'},Math.round(maxVol).toLocaleString('zh-CN')));
   }
   const ticks=width<420?3:width<620?4:6;
-  for(let i=0;i<ticks;i++){const index=Math.round((rows.length-1)*i/(ticks-1)),px=x(index);svg.append(element('text',{x:px,y:height-15,'text-anchor':i===0?'start':i===ticks-1?'end':'middle'},shortDate(dateTime(rows[index][0]))))}
+  for(let i=0;i<ticks;i++){const index=Math.round((rows.length-1)*i/(ticks-1)),px=x(index);svg.append(element('text',{x:px,y:height-15,'text-anchor':i===0?'start':i===ticks-1?'end':'middle'},candleTickLabel(rows[index][0])))}
   const guide=element('line',{x1:0,x2:0,y1:top,y2:activity?activityTop+activityH:top+plotH,stroke:'#8390a3',visibility:'hidden','stroke-dasharray':'3 3'});svg.append(guide);
   const overlay=element('rect',{x:left,y:top,width:plotW,height:(activity?activityTop+activityH:top+plotH)-top,fill:'transparent','data-kline-overlay':''});
   const pointerIndex=event=>{const bounds=svg.getBoundingClientRect();if(!bounds.width)return Math.max(0,rows.length-1);const px=(event.clientX-bounds.left)*width/bounds.width;return Math.max(0,Math.min(rows.length-1,Math.round((px-left)/plotW*rows.length-.5)))};
   const showTip=event=>{
    const index=pointerIndex(event),row=rows[index],gx=x(index);guide.setAttribute('x1',gx);guide.setAttribute('x2',gx);guide.setAttribute('visibility','visible');tip.replaceChildren();
-   const date=document.createElement('strong');date.textContent=`${row[0].slice(0,4)}-${row[0].slice(4,6)}-${row[0].slice(6)}`;tip.appendChild(date);
+   const date=document.createElement('strong');date.textContent=candleTooltipDate(row[0]);tip.appendChild(date);
    [['开',row[1]],['高',row[2]],['低',row[3]],['收',row[4]],['成交量',row[5]],['持仓量',row[6]]].forEach(([label,value])=>{const item=document.createElement('div'),l=document.createElement('span'),v=document.createElement('span');l.textContent=label;v.textContent=Number.isFinite(value)?(label.length>1?Math.round(value).toLocaleString('zh-CN'):value.toFixed(2)):'—';item.append(l,v);tip.appendChild(item)});
+   for(const signal of signalsByDate.get(row[0])||[]){
+    const item=document.createElement('div'),l=document.createElement('span'),v=document.createElement('span');
+    l.textContent='价格行为';v.textContent=`${signal.label}${signal.detail?' · '+signal.detail:''}`;item.append(l,v);tip.appendChild(item);
+   }
    tip.hidden=false;tip.style.left=`${Math.max(0,Math.min(width-tip.offsetWidth,gx+12))}px`;tip.style.top='32px';
   };
   overlay.addEventListener('pointermove',event=>{if(!pan)showTip(event)});

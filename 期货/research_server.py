@@ -242,7 +242,7 @@ class ResearchStore:
             if kind=='update':
                 from fetch_futures_data import make_collector
                 from focused import run_focused
-                from history import prepare_history
+                from history import prepare_history_fast
                 source=self.root/'updates'/asof;collector=make_collector(root=source)
                 self.progress('采集五交易所主力与次主力；旧数据库数据继续可用')
                 result=run_focused(collector,asof,asof,bool(request.get('force',False)))
@@ -256,8 +256,24 @@ class ResearchStore:
                 except Exception:
                     # 席位排名只用于展示，失败不能阻断行情与策略快照发布。
                     pass
-                self.progress('补齐历史与换月校正')
-                prepare_history(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,force=bool(request.get('force',False)),progress=self.progress)
+                self.progress('增量补齐历史与换月校正')
+                previous_source = None
+                if not bool(request.get('force', False)):
+                    try:
+                        previous_source = snapshot_source(self.root, self.active)
+                    except DataError:
+                        previous_source = None
+                history_report=prepare_history_fast(collector,read_csv(source/f'raw/selected/{asof}.csv'),asof,
+                    previous_source=previous_source,force=bool(request.get('force',False)),progress=self.progress)
+                history_summary=dict(
+                    mode='full' if bool(request.get('force',False)) or previous_source is None else 'incremental',
+                    incremental_prepared=history_report.get('incremental_prepared',0),
+                    full_rebuild_count=history_report.get('full_rebuild_count',len(history_report.get('prepared',[]))),
+                    prepared_count=len(history_report.get('prepared',[])),
+                    exclusion_count=len(history_report.get('exclusions',[])))
+                with self.lock:
+                    self.job['history']=history_summary
+                    self._persist_state()
                 self.progress('验证指标并发布快照');self.copy_supplements(source);payload=ensure_decision_payload(build_payload(source,asof,self.phase))
                 if not payload['quality']['success']:raise DataError('有效篮子不足，保留原数据库数据')
                 payload=publish_snapshot(self.root,payload,source)
@@ -403,6 +419,15 @@ def main():
                     self.respond(dict(asof=asof,source='sina',requested=len(codes),count=len(result['quotes']),
                         cached=result['cached'],error=result['error'],
                         quotes=result['quotes'],execution=result['execution']))
+                elif parsed.path=='/api/intraday/5m':
+                    # 新浪分钟线只读旁路：只供详情页盘中参考，不进入评分、快照或 MySQL。
+                    from realtime import minute_snapshot
+                    code=params.get('code',[''])[0]
+                    if not code:raise ValueError('缺少 code 参数')
+                    result=minute_snapshot(code, freq=params.get('freq',['5'])[0])
+                    self.respond(dict(asof=asof,source='sina',code=code,symbol=result['symbol'],
+                        freq=params.get('freq',['5'])[0]+'m',count=len(result['bars']),cached=result['cached'],
+                        error=result['error'],bars=result['bars']))
                 elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=available_snapshots(store.root)))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))

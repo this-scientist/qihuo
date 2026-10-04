@@ -42,9 +42,14 @@ export async function mountToolbar(){
  date.value=inputDate(selected);
  date.onchange=()=>{const chosen=compactDate(date.value);if(!chosen)return;const url=new URL(location.href);url.searchParams.set('asof',chosen);location.href=url.href};
  const status=controls.querySelector('#job-status');let watching=false;
+ function jobText(job){
+  const history=job.history;
+  const historyText=history?` · 历史${history.mode==='incremental'?'增量':'全量'}：增量${history.incremental_prepared??0}，回补${history.full_rebuild_count??0}，排除${history.exclusion_count??0}`:'';
+  return `${job.status} · ${job.message||'无任务'}${historyText}`;
+ }
  async function watch(){
   if(watching)return;watching=true;
-  try{let job;do{job=await api('/api/jobs');status.textContent=`${job.status} · ${job.message||'无任务'}`;controls.querySelectorAll('button').forEach(b=>b.disabled=['queued','running'].includes(job.status));if(['queued','running'].includes(job.status))await new Promise(r=>setTimeout(r,1800))}while(['queued','running'].includes(job.status));
+  try{let job;do{job=await api('/api/jobs');status.textContent=jobText(job);controls.querySelectorAll('button').forEach(b=>b.disabled=['queued','running'].includes(job.status));if(['queued','running'].includes(job.status))await new Promise(r=>setTimeout(r,1800))}while(['queued','running'].includes(job.status));
    if(['success','partial'].includes(job.status)){const view=document.createElement('button');view.textContent='查看该日期';view.onclick=()=>{const url=new URL(location.href);url.searchParams.set('asof',job.asof);location.href=url.href};status.append(' ',view)}
   }catch(error){status.textContent=error.message}finally{watching=false}
  }

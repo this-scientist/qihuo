@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries, klineWheelIntent, ema20GapRuns} from './charts.mjs';
+import {zoomRange, normalizePriceLevels, priceFromPointer, ema20ChartSeries, klineWheelIntent, ema20GapRuns, candleTickLabel, candleTooltipDate} from './charts.mjs';
 
 test('chart accepts only the EMA20 overlay',()=>{
  assert.deepEqual(ema20ChartSeries({ema20:[1,2],ma60:[3,4]}),[{id:'ema20',label:'EMA20',values:[1,2]}]);
@@ -56,6 +56,13 @@ test('K-line wheel navigates normally and zooms only with Control',()=>{
  assert.equal(klineWheelIntent({deltaY:-40,ctrlKey:true},'navigate'),'zoom-in');
  assert.equal(klineWheelIntent({deltaY:4,ctrlKey:false},'navigate'),'none');
  assert.equal(klineWheelIntent({deltaY:40,ctrlKey:false},'zoom'),'zoom-out');
+});
+
+test('K-line labels accept daily dates and intraday timestamps',()=>{
+ assert.equal(candleTickLabel('20260930'),'09-30');
+ assert.equal(candleTooltipDate('20260930'),'2026-09-30');
+ assert.equal(candleTickLabel('2026-09-30 09:05'),'09:05');
+ assert.equal(candleTooltipDate('2026-09-30 09:05'),'2026-09-30 09:05');
 });
 
 test('ema20GapRuns marks same-side runs above or below EMA20 longer than 20 bars',()=>{

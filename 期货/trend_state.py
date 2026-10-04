@@ -14,6 +14,24 @@ STATE_LABELS = {
     "T5": "T5 趋势衰竭",
 }
 
+MARKET_CYCLE_BY_STATE = {
+    "T0": ("TRADING_RANGE", "交易区间"),
+    "T1": ("BREAKOUT_ATTEMPT", "突破尝试"),
+    "T2": ("BREAKOUT_SPIKE", "突破尖峰"),
+    "T3": ("TIGHT_CHANNEL", "紧密通道"),
+    "T4": ("BROAD_CHANNEL", "宽通道"),
+    "T5": ("EXHAUSTION", "趋势末端"),
+}
+
+MARKET_CYCLE_REASONS = {
+    "TRADING_RANGE": "多空重新接近平衡，方向性买方期权等待下一次有效突破。",
+    "BREAKOUT_ATTEMPT": "平衡开始被打破，但突破仍需跟随确认。",
+    "BREAKOUT_SPIKE": "关键位置突破并得到方向证据确认，市场进入失衡启动段。",
+    "TIGHT_CHANNEL": "突破后回撤较浅且方向证据继续增强，阻力最小方向清晰。",
+    "BROAD_CHANNEL": "趋势仍在，但双向交易增强，新增买方仓需等待更好的价格位置。",
+    "EXHAUSTION": "趋势老化、过度延伸或推进衰减，不再推荐新开方向性买方仓。",
+}
+
 
 def _finite(value) -> bool:
     try:
@@ -115,6 +133,15 @@ def _score_for_state(state: str, start_score: float, rps: float, adx: float) -> 
     return round(base, 2)
 
 
+def _market_cycle_for_state(state: str) -> dict:
+    phase, label = MARKET_CYCLE_BY_STATE[state]
+    return {
+        "market_cycle_phase": phase,
+        "market_cycle_label": label,
+        "market_cycle_reason": MARKET_CYCLE_REASONS[phase],
+    }
+
+
 def classify_trend_state(row: dict, side: str | None, state_v2: str | None, start_score: float | int | None) -> dict:
     """Classify a decision row into T0-T5 using existing reliable indicators.
 
@@ -184,4 +211,5 @@ def classify_trend_state(row: dict, side: str | None, state_v2: str | None, star
         "trend_speed_level": speed,
         "trend_accel_level": accel,
         "trend_option_gate": gate,
+        **_market_cycle_for_state(state),
     }

@@ -7,16 +7,22 @@
 """
 import threading
 import time
+import json
+import re
 from datetime import datetime
+from urllib.parse import urlencode
 
 import requests
 
 SINA_URL = 'https://hq.sinajs.cn/list='
+SINA_MIN_URL = 'https://stock2.finance.sina.com.cn/futures/api/json.php/InnerFuturesNewService.getFewMinLine'
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
            'Referer': 'https://finance.sina.com.cn'}
 CHUNK_SIZE = 30
 CACHE_SECONDS = 5.0
+MINUTE_CACHE_SECONDS = 30.0
 REQUEST_TIMEOUT = 10.0
+SUPPORTED_MINUTE_FREQS = {5, 15, 30, 60}
 
 # 新浪内盘期货字段位次；已用东财同一时刻数据交叉验证（开高低/最新/昨结/买卖一档/持仓成交）
 POSITIONS = {0: 'name', 1: 'time', 2: 'open', 3: 'high', 4: 'low', 6: 'bid', 7: 'ask',
@@ -27,6 +33,7 @@ NUMERIC = {'open', 'high', 'low', 'bid', 'ask', 'last', 'pre_settle',
 MIN_FIELDS = 18
 
 _CACHE = {}
+_MINUTE_CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -133,6 +140,98 @@ def snapshot(codes, timeout=REQUEST_TIMEOUT, ttl=CACHE_SECONDS, get=None, now=No
     return dict(value, cached=False)
 
 
+def sina_min_symbol(ts_code):
+    """把真实期货合约映射到新浪内盘主连分钟线代码，如 RB2701.SHF -> RB0。"""
+    match = re.match(r'^([A-Za-z]+)', str(ts_code or '').strip())
+    return (match.group(1).upper() + '0') if match else None
+
+
+def normalize_minute_freq(freq):
+    value = int(freq)
+    if value not in SUPPORTED_MINUTE_FREQS:
+        raise ValueError('unsupported minute frequency')
+    return value
+
+
+def _minute_number(value):
+    number = _number(value)
+    return number if number is not None and number == number else None
+
+
+def _minute_time(value):
+    text = str(value or '').strip()
+    if len(text) >= 16:
+        return text[:16]
+    return text or None
+
+
+def parse_minute_bars(text):
+    """解析新浪 InnerFuturesNewService.getFewMinLine 的 JSON 返回。"""
+    try:
+        data = json.loads(str(text or '').strip())
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    bars = []
+    for item in data:
+        if isinstance(item, dict):
+            fields = [item.get(key) for key in ['d', 'o', 'h', 'l', 'c', 'v']]
+        elif isinstance(item, (list, tuple)) and len(item) >= 6:
+            fields = item[:6]
+        else:
+            continue
+        stamp = _minute_time(fields[0])
+        open_, high, low, close, volume = [_minute_number(value) for value in fields[1:6]]
+        if stamp and all(value is not None for value in [open_, high, low, close]):
+            bars.append([stamp, open_, high, low, close, volume])
+    return bars
+
+
+def fetch_minute_bars(ts_code, freq=5, timeout=REQUEST_TIMEOUT, get=None):
+    """取新浪期货主连分钟 K 线，返回 (bars, error, symbol)。失败不抛异常。"""
+    symbol = sina_min_symbol(ts_code)
+    if not symbol:
+        return [], '缺少可识别的期货合约代码', None
+    try:
+        freq = normalize_minute_freq(freq)
+    except (TypeError, ValueError):
+        return [], '不支持的分钟周期', symbol
+    requester = get or requests.get
+    try:
+        url = SINA_MIN_URL + '?' + urlencode({'symbol': symbol, 'type': int(freq)})
+        response = requester(url, headers=HEADERS, timeout=timeout)
+        response.raise_for_status()
+        bars = parse_minute_bars(response.text)
+    except Exception as exc:
+        return [], '新浪5分钟K线请求失败（%s）' % type(exc).__name__, symbol
+    if not bars:
+        return [], '新浪5分钟K线没有返回可用数据', symbol
+    return bars, None, symbol
+
+
+def minute_snapshot(ts_code, freq=5, timeout=REQUEST_TIMEOUT, ttl=MINUTE_CACHE_SECONDS, get=None, now=None):
+    """单合约分钟线短缓存；失败也缓存，避免前端刷新时反复打上游。"""
+    try:
+        freq = normalize_minute_freq(freq)
+    except (TypeError, ValueError):
+        return dict(symbol=sina_min_symbol(ts_code), bars=[], error='不支持的分钟周期', cached=False)
+    key = (str(ts_code or ''), freq)
+    if not key[0]:
+        return dict(symbol=None, bars=[], error='缺少合约代码', cached=False)
+    moment = time.monotonic() if now is None else now
+    with _CACHE_LOCK:
+        hit = _MINUTE_CACHE.get(key)
+        if hit is not None and moment - hit['at'] < ttl:
+            return dict(hit['value'], cached=True)
+    bars, error, symbol = fetch_minute_bars(key[0], freq=freq, timeout=timeout, get=get)
+    value = dict(symbol=symbol, bars=bars, error=error)
+    with _CACHE_LOCK:
+        _MINUTE_CACHE[key] = dict(at=moment, value=value)
+    return dict(value, cached=False)
+
+
 def clear_cache():
     with _CACHE_LOCK:
         _CACHE.clear()
+        _MINUTE_CACHE.clear()

@@ -13,6 +13,7 @@ const base = overrides => ({
   start_score: 81,
   burst_score: 76,
   trend_state_label: '趋势启动',
+  market_cycle_label: '突破尖峰',
   signal_label: '突破',
   rps_accel: 14,
   oi_change5: 3,
@@ -157,6 +158,8 @@ for(const optionRecords of [[], [blocked], [option()]]){
   assert.deepEqual(row.riskReasons, ['失效关注：跌破今日支撑95.00']);
   commoditySnapshots.push({action: row.action, reasons: row.reasons, risk: row.risk});
 }
+assert.equal(commoditySnapshots[0].reasons.includes('突破尖峰'), true);
+assert.equal(commoditySnapshots[0].reasons.includes('趋势启动'), false);
 assert.deepEqual(commoditySnapshots[1], commoditySnapshots[0]);
 assert.deepEqual(commoditySnapshots[2], commoditySnapshots[0]);
 

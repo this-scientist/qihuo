@@ -1,6 +1,7 @@
 """Only historical main contracts and the current secondary, with roll audit."""
 import hashlib
 import math
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -54,6 +55,74 @@ def query_history(collector, api, code, start, end, force=False):
     atomic_csv(result,path)
     atomic_json(dict(version=1,api=api,params=params,sha256=hashlib.sha256(path.read_bytes()).hexdigest()),path.with_suffix('.json'))
     return result
+
+
+def _hash(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def prepare_history_incremental(root, selected, asof, previous_source):
+    """Reuse yesterday's prepared history when today's mapped main contract did not change.
+
+    Returns (partial_report, remaining_main_codes). Remaining codes need the full
+    prepare_history path because they are missing, stale, corrupted, or rolled.
+    """
+    root, previous_source = Path(root), Path(previous_source)
+    prepared, exclusions, remaining = [], [], []
+    previous_report_path = previous_source / 'quality/history_run.json'
+    if not previous_report_path.exists():
+        return dict(asof=asof, prepared=[], exclusions=[]), sorted(selected[selected.role.eq('main')].main_code.unique())
+    try:
+        previous_entries = {entry['ts_code']: entry for entry in json.loads(previous_report_path.read_text(encoding='utf-8')).get('prepared', [])}
+    except (ValueError, OSError):
+        return dict(asof=asof, prepared=[], exclusions=[]), sorted(selected[selected.role.eq('main')].main_code.unique())
+    mains = selected[selected.role.eq('main')].sort_values(['exchange', 'main_code'])
+    for current in mains.itertuples():
+        code, safe = current.main_code, current.main_code.replace('.', '_')
+        history_src = previous_source / f'processed/history/{safe}.csv'
+        pair_src = previous_source / f'processed/pair_history/{safe}.csv'
+        try:
+            entry = previous_entries.get(code)
+            if not entry:
+                raise DataError('previous history entry missing')
+            if entry.get('history_sha256') != _hash(history_src) or entry.get('pair_sha256') != _hash(pair_src):
+                raise DataError('previous history hash mismatch')
+            history = read_csv(history_src).sort_values('trade_date').reset_index(drop=True)
+            if history.empty or str(history.trade_date.iloc[-1]) >= asof:
+                raise DataError('previous history is not older than update date')
+            if history.mapping_ts_code.iloc[-1] != current.ts_code:
+                raise DataError('main contract changed; full roll rebuild required')
+            last = history.iloc[-1]
+            factor = float(last.get('adj_factor', 1.0))
+            row = {column: getattr(current, column) for column in selected.columns if hasattr(current, column)}
+            row.update(ts_code=code, mapping_ts_code=current.ts_code, exchange=current.exchange,
+                raw_close=float(current.close), adj_factor=factor, adjustment='forward_ratio_same_day_overlap')
+            for field in ['open', 'high', 'low', 'close', 'settle']:
+                if field in row and pd.notna(row[field]):
+                    row[field] = float(row[field]) * factor
+            history = pd.concat([history, pd.DataFrame([row])], ignore_index=True, sort=False)
+            history_path = root / f'processed/history/{safe}.csv'
+            atomic_csv(history, history_path)
+            rolls_src = history_src.with_suffix('.rolls.csv')
+            rolls_dst = history_path.with_suffix('.rolls.csv')
+            if rolls_src.exists():
+                rolls_dst.parent.mkdir(parents=True, exist_ok=True)
+                rolls_dst.write_bytes(rolls_src.read_bytes())
+            else:
+                atomic_csv(pd.DataFrame(columns=['trade_date','reference_date','old_code','new_code','old_close','new_close']), rolls_dst)
+            pair = read_csv(pair_src)
+            today_pair = selected[selected.main_code.eq(code)].copy()
+            combined = pd.concat([pair, today_pair], ignore_index=True, sort=False)
+            combined = combined.drop_duplicates(['trade_date', 'role', 'ts_code'], keep='last')
+            combined = combined.sort_values(['trade_date', 'role', 'ts_code']).groupby('role', group_keys=False).tail(65)
+            pair_path = root / f'processed/pair_history/{safe}.csv'
+            atomic_csv(combined, pair_path)
+            prepared.append(dict(ts_code=code, exchange=current.exchange, rows=len(history), rolls=None,
+                history_sha256=_hash(history_path), pair_sha256=_hash(pair_path), incremental=True))
+        except (DataError, OSError, ValueError, KeyError) as exc:
+            remaining.append(code)
+            exclusions.append(dict(ts_code=code, exchange=getattr(current, 'exchange', None), reason=f'incremental skipped: {exc}'))
+    return dict(asof=asof, prepared=prepared, exclusions=exclusions), sorted(set(remaining))
 
 
 def prepare_history(collector, selected, asof, days=550, min_history=280, force=False,progress=None):
@@ -135,4 +204,24 @@ def prepare_history(collector, selected, asof, days=550, min_history=280, force=
             print(f'Excluded {code}: {exc}',flush=True)
     report = dict(asof=asof,start=start,prepared=prepared,exclusions=exclusions)
     atomic_json(report,collector.root/'quality/history_run.json')
+    return report
+
+
+def prepare_history_fast(collector, selected, asof, previous_source=None, days=550, min_history=280, force=False, progress=None):
+    if force or previous_source is None:
+        return prepare_history(collector, selected, asof, days, min_history, force, progress)
+    incremental, remaining = prepare_history_incremental(collector.root, selected, asof, previous_source)
+    if remaining:
+        if progress:
+            progress(f'增量历史命中 {len(incremental["prepared"])} 个；重建 {len(remaining)} 个')
+        subset = selected[selected.main_code.isin(remaining)].copy()
+        rebuilt = prepare_history(collector, subset, asof, days, min_history, force, progress)
+        prepared = incremental['prepared'] + rebuilt['prepared']
+        exclusions = rebuilt['exclusions']
+    else:
+        prepared, exclusions = incremental['prepared'], incremental['exclusions']
+    report = dict(asof=asof, start=(datetime.strptime(asof,'%Y%m%d') - timedelta(days=days)).strftime('%Y%m%d'),
+        prepared=prepared, exclusions=exclusions, incremental_prepared=len(incremental['prepared']),
+        full_rebuild_count=len(remaining))
+    atomic_json(report, collector.root/'quality/history_run.json')
     return report

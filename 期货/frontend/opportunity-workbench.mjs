@@ -8,6 +8,7 @@ const sideOf = record => record.decision_side || record.trend_direction || recor
 const optionSideFor = side => side === 'long' ? 'C' : side === 'short' ? 'P' : null;
 const signed = value => finite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}` : null;
 const truthy = value => value === true || String(value).toLowerCase() === 'true';
+const cycleLabel = record => record?.market_cycle_label || record?.trend_state_label || record?.state_v2;
 
 export function ema20Summary(record){
   const direction={rising:'上行',falling:'下行',flat:'走平',unavailable:'数据不足'}[record?.ema20_direction]||'数据不足';
@@ -67,8 +68,7 @@ function reasonList(record, executionItem){
   const reasons = [];
   const ema=ema20Summary(record);
   reasons.push(`EMA20 ${ema.direction}·${ema.strength}，距离 ${ema.distance}`);
-  if(record.trend_state_label)reasons.push(record.trend_state_label);
-  else if(record.state_v2)reasons.push(record.state_v2);
+  if(cycleLabel(record))reasons.push(cycleLabel(record));
   if(record.structure_confirm === 'SUPPORT')reasons.push('商品结构同向支持');
   if(record.structure_confirm === 'CONFLICT')reasons.push('趋势与结构冲突');
   if(finite(record.rps_accel) && Math.abs(record.rps_accel) >= 8)reasons.push(`RPS五日变化${signed(record.rps_accel)}`);

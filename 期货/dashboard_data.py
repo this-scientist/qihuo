@@ -12,6 +12,7 @@ from dataclasses import asdict
 from decision_v2 import build_decisions, unify_records
 from trend_model import MODEL_VERSION
 from futures_signals import chart_signals, signal_for_history
+from measured_move import measured_move_summary
 
 CHART_SCHEMA_VERSION = 3
 PAYLOAD_SCHEMA_VERSION = 3
@@ -228,13 +229,14 @@ def build_payload(root, asof,phase_settings=None):
     selected, histories, exclusions, _ = load_inputs(root, asof, Settings())
     snapshot = selected[selected.role.eq('main')].set_index('main_code').to_dict('index')
     common = sorted(set.intersection(*(set(h.trade_date) for h in histories.values())))[-251:]
-    curves, moving, candles, technical_signals = {}, {}, {}, {}
+    curves, moving, candles, technical_signals, measured_moves = {}, {}, {}, {}, {}
     for code, table in histories.items():
         shared = table.set_index('trade_date').loc[common]
         curves[code] = [[day, round(float(value),6)] for day,value in shared.close.items()]
         candles[code] = [chart_candle(day, row) for day,row in shared.iterrows()]
         moving[code] = chart_moving(shared)
         technical_signals[code] = chart_signals(shared.reset_index())
+        measured_moves[code] = measured_move_summary(shared.reset_index())
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]
     expected_holding_contracts = {
@@ -295,7 +297,7 @@ def build_payload(root, asof,phase_settings=None):
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
         chart_schema_version=CHART_SCHEMA_VERSION,
         payload_schema_version=PAYLOAD_SCHEMA_VERSION,
-        technical_signals=technical_signals,
+        technical_signals=technical_signals, measured_moves=measured_moves,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=sector_groups, factors=factors, quality=quality, exclusions=exclusions,
         phase_settings=asdict(phase_settings),supplemental_status=supplemental_status,

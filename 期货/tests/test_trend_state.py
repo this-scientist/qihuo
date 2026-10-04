@@ -65,6 +65,8 @@ class TrendStateTests(unittest.TestCase):
         self.assertEqual(result['trend_state'], 'T2')
         self.assertEqual(result['trend_transition'], 'T1→T2')
         self.assertEqual(result['trend_option_gate'], 'ALLOW')
+        self.assertEqual(result['market_cycle_phase'], 'BREAKOUT_SPIKE')
+        self.assertEqual(result['market_cycle_label'], '突破尖峰')
 
     def test_acceleration_is_t3_priority(self):
         result = classify_trend_state(row(
@@ -79,6 +81,8 @@ class TrendStateTests(unittest.TestCase):
         self.assertEqual(result['trend_transition'], 'T2→T3')
         self.assertEqual(result['trend_accel_level'], '增强')
         self.assertEqual(result['trend_option_gate'], 'ALLOW')
+        self.assertEqual(result['market_cycle_phase'], 'TIGHT_CHANNEL')
+        self.assertEqual(result['market_cycle_label'], '紧密通道')
 
     def test_confirmed_continuation_is_t4_conditional(self):
         result = classify_trend_state(row(
@@ -89,6 +93,7 @@ class TrendStateTests(unittest.TestCase):
 
         self.assertEqual(result['trend_state'], 'T4')
         self.assertEqual(result['trend_option_gate'], 'CONDITIONAL')
+        self.assertEqual(result['market_cycle_phase'], 'BROAD_CHANNEL')
 
     def test_overextended_or_weakening_is_t5_blocked(self):
         result = classify_trend_state(row(
@@ -101,6 +106,19 @@ class TrendStateTests(unittest.TestCase):
         self.assertEqual(result['trend_state'], 'T5')
         self.assertEqual(result['trend_transition'], 'T4→T5')
         self.assertEqual(result['trend_option_gate'], 'BLOCK')
+        self.assertEqual(result['market_cycle_phase'], 'EXHAUSTION')
+
+    def test_prepare_maps_to_breakout_attempt_without_t_number_display(self):
+        result = classify_trend_state(row(
+            phase='方向形成', trend_direction='long', directional_rps20=64,
+            rps20_prev5=42, adx=18, adx_slope=2.5, plus_di=24, minus_di=18,
+            oi_change5=2.0, return5=1.5,
+        ), 'long', 'PREPARE', 58)
+
+        self.assertEqual(result['trend_state'], 'T1')
+        self.assertEqual(result['market_cycle_phase'], 'BREAKOUT_ATTEMPT')
+        self.assertEqual(result['market_cycle_label'], '突破尝试')
+        self.assertNotIn('T1', result['market_cycle_label'])
 
     def test_ema20_actionability_is_the_primary_option_gate(self):
         blocked = classify_trend_state(row(

@@ -1,7 +1,9 @@
 import unittest
 from datetime import datetime, timedelta
 
-from realtime import (age_seconds, fetch_quotes, parse_quote, snapshot, clear_cache)
+from realtime import (age_seconds, fetch_quotes, parse_quote, snapshot,
+                      clear_cache, sina_min_symbol, parse_minute_bars,
+                      fetch_minute_bars, minute_snapshot, normalize_minute_freq)
 
 # 真实抓取到的上期所铜 2610 盘中报价；开高低/最新/昨结已与东财同一时刻数据交叉验证
 REAL = ('铜2610,110224,110790.000,111160.000,110560.000,0.000,110810.000,110820.000,'
@@ -145,6 +147,53 @@ class SnapshotCacheTests(unittest.TestCase):
         result = snapshot([], get=recorder)
         self.assertEqual(result['quotes'], {})
         self.assertEqual(recorder.urls, [])
+
+
+class MinuteBarTests(unittest.TestCase):
+    def setUp(self):
+        clear_cache()
+
+    def test_maps_contract_to_sina_main_symbol(self):
+        self.assertEqual(sina_min_symbol('RB2701.SHF'), 'RB0')
+        self.assertEqual(sina_min_symbol('cu2610.SHF'), 'CU0')
+        self.assertIsNone(sina_min_symbol(''))
+
+    def test_normalizes_supported_minute_frequencies(self):
+        self.assertEqual(normalize_minute_freq('15'), 15)
+        self.assertEqual(normalize_minute_freq(60), 60)
+        with self.assertRaises(ValueError):
+            normalize_minute_freq('2')
+
+    def test_parses_sina_minute_json_objects(self):
+        text = '[{"d":"2026-09-30 09:05:00","o":"3500","h":"3510","l":"3495","c":"3508","v":"1200"},' \
+               '{"d":"2026-09-30 09:10:00","o":"3508","h":"3520","l":"3500","c":"3515","v":"1800"}]'
+        bars = parse_minute_bars(text)
+        self.assertEqual(bars, [
+            ['2026-09-30 09:05', 3500.0, 3510.0, 3495.0, 3508.0, 1200.0],
+            ['2026-09-30 09:10', 3508.0, 3520.0, 3500.0, 3515.0, 1800.0],
+        ])
+
+    def test_fetch_minute_bars_degrades_instead_of_raising(self):
+        def fail(*args, **kwargs):
+            raise OSError('upstream down')
+
+        bars, error, symbol = fetch_minute_bars('RB2701.SHF', get=fail)
+        self.assertEqual(bars, [])
+        self.assertEqual(symbol, 'RB0')
+        self.assertIn('OSError', error)
+
+    def test_minute_snapshot_caches_failures(self):
+        calls = []
+
+        def fail(url, headers=None, timeout=None):
+            calls.append(url)
+            raise OSError('upstream down')
+
+        first = minute_snapshot('RB2701.SHF', get=fail, now=100.0)
+        second = minute_snapshot('RB2701.SHF', get=fail, now=101.0)
+        self.assertFalse(first['cached'])
+        self.assertTrue(second['cached'])
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == '__main__':
