@@ -14,8 +14,8 @@ from trend_model import MODEL_VERSION
 from futures_signals import chart_signals, signal_for_history
 from measured_move import measured_move_summary
 
-CHART_SCHEMA_VERSION = 3
-PAYLOAD_SCHEMA_VERSION = 3
+CHART_SCHEMA_VERSION = 4
+PAYLOAD_SCHEMA_VERSION = 5
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
 PERCENT_FIELDS = {'return1','return5','return20','return60','return120','atr_change5','oi_change5','oi_change20',
     'main_oi_change5','main_oi_change20','secondary_oi_change5','secondary_oi_change20',
@@ -54,6 +54,73 @@ def chart_moving(frame):
     """Publish the sole chart overlay, reusing canonical EMA20 when available."""
     values = frame['ema20'] if 'ema20' in frame else frame.close.ewm(span=20, adjust=False).mean()
     return {'ema20': [round(float(value), 6) if pd.notna(value) else None for value in values]}
+
+
+def _finite_or_none(value, digits=4):
+    if value is None or pd.isna(value):
+        return None
+    numeric = float(value)
+    return round(numeric, digits) if math.isfinite(numeric) else None
+
+
+def load_ml_price_action_annotations(root):
+    base = Path(root)
+    dataset_path = base / 'ml/processed/cycle_strategy_dataset_h5.csv'
+    summary_path = base / 'ml/processed/cycle_strategy_summary_h5.csv'
+    if not dataset_path.exists() or not summary_path.exists():
+        base = Path(__file__).resolve().parent / 'data'
+        dataset_path = base / 'ml/processed/cycle_strategy_dataset_h5.csv'
+        summary_path = base / 'ml/processed/cycle_strategy_summary_h5.csv'
+    if not dataset_path.exists() or not summary_path.exists():
+        return {}
+    try:
+        dataset = pd.read_csv(dataset_path, dtype={'trade_date': str, 'product_code': str})
+        summary = pd.read_csv(summary_path)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return {}
+    keys = ['market_cycle_phase', 'signal_bar', 'strategy']
+    required = set(['product_code', 'trade_date', 'close', 'direction', 'market_cycle_label'] + keys)
+    if not required.issubset(dataset.columns) or not set(keys + ['samples', 'win_rate', 'avg_r']).issubset(summary.columns):
+        return {}
+    stats = summary[keys + ['samples', 'win_rate', 'avg_r', 'median_r']].copy()
+    merged = dataset.merge(stats, on=keys, how='left', validate='many_to_one')
+    annotations = {}
+    label_map = {
+        'TRADING_RANGE': 'TR',
+        'BREAKOUT_ATTEMPT': 'BA',
+        'BREAKOUT_SPIKE': 'BO',
+        'TIGHT_CHANNEL': 'TC',
+        'BROAD_CHANNEL': 'BC',
+        'EXHAUSTION': 'EX',
+    }
+    signal_map = {
+        'BULL_TREND_BAR': '多头趋势K',
+        'BEAR_TREND_BAR': '空头趋势K',
+        'BULL_REVERSAL_BAR': '多头反转K',
+        'BEAR_REVERSAL_BAR': '空头反转K',
+        'GAP_BAR': '跳空K',
+        'OVERLAP_BAR': '重叠K',
+    }
+    for product_code, group in merged.groupby('product_code'):
+        rows = []
+        for row in group.sort_values('trade_date').to_dict('records'):
+            rows.append({
+                'trade_date': str(row['trade_date']),
+                'close': _finite_or_none(row.get('close'), 6),
+                'side': row.get('direction'),
+                'label': label_map.get(row.get('market_cycle_phase'), 'ML'),
+                'market_cycle_phase': row.get('market_cycle_phase'),
+                'market_cycle_label': row.get('market_cycle_label'),
+                'signal_bar': row.get('signal_bar'),
+                'signal_bar_label': signal_map.get(row.get('signal_bar'), row.get('signal_bar')),
+                'strategy': row.get('strategy'),
+                'samples': int(row['samples']) if pd.notna(row.get('samples')) else None,
+                'win_rate': _finite_or_none(row.get('win_rate')),
+                'avg_r': _finite_or_none(row.get('avg_r')),
+                'median_r': _finite_or_none(row.get('median_r')),
+            })
+        annotations[product_code] = rows
+    return annotations
 
 
 def chart_schema_current(payload):
@@ -230,6 +297,8 @@ def build_payload(root, asof,phase_settings=None):
     snapshot = selected[selected.role.eq('main')].set_index('main_code').to_dict('index')
     common = sorted(set.intersection(*(set(h.trade_date) for h in histories.values())))[-251:]
     curves, moving, candles, technical_signals, measured_moves = {}, {}, {}, {}, {}
+    ml_all = load_ml_price_action_annotations(root)
+    ml_price_action = {}
     for code, table in histories.items():
         shared = table.set_index('trade_date').loc[common]
         curves[code] = [[day, round(float(value),6)] for day,value in shared.close.items()]
@@ -237,6 +306,8 @@ def build_payload(root, asof,phase_settings=None):
         moving[code] = chart_moving(shared)
         technical_signals[code] = chart_signals(shared.reset_index())
         measured_moves[code] = measured_move_summary(shared.reset_index())
+        visible_dates = set(shared.index.astype(str))
+        ml_price_action[code] = [row for row in ml_all.get(code, []) if row['trade_date'] in visible_dates]
     scores = read_csv(root/f'processed/radar/{asof}/scores.csv')
     records = [public_metrics(row) for row in scores.to_dict('records')]
     expected_holding_contracts = {
@@ -297,7 +368,7 @@ def build_payload(root, asof,phase_settings=None):
     return dict(asof=asof, names=names, records=records, curves=curves, moving=moving, candles=candles,
         chart_schema_version=CHART_SCHEMA_VERSION,
         payload_schema_version=PAYLOAD_SCHEMA_VERSION,
-        technical_signals=technical_signals, measured_moves=measured_moves,
+        technical_signals=technical_signals, measured_moves=measured_moves, ml_price_action=ml_price_action,
         decisions=decisions, decision_summary=decision_summary, model_version=MODEL_VERSION,
         sectors=sector_groups, factors=factors, quality=quality, exclusions=exclusions,
         phase_settings=asdict(phase_settings),supplemental_status=supplemental_status,

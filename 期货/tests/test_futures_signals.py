@@ -24,6 +24,20 @@ class FuturesSignalTests(unittest.TestCase):
         self.assertEqual(signal['signal_label'], '一买')
         self.assertEqual(signal['signal_side'], 'long')
 
+    def test_first_buy_below_falling_ema_is_downtrend_rebound(self):
+        signal = signal_for_history(frame([30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                                           20, 19, 18, 17, 16, 15, 14, 12, 11, 13]))
+        self.assertEqual(signal['signal_code'], 'BUY1')
+        self.assertEqual(signal['signal_context'], 'downtrend_rebound')
+        self.assertEqual(signal['signal_context_label'], '下跌趋势反弹一买')
+
+    def test_first_buy_above_rising_ema_is_cycle_reversal(self):
+        signal = signal_for_history(frame([10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                           20, 21, 22, 23, 24, 25, 24, 23, 22, 26]))
+        self.assertEqual(signal['signal_code'], 'BUY1')
+        self.assertEqual(signal['signal_context'], 'cycle_reversal')
+        self.assertEqual(signal['signal_context_label'], '大周期反转一买')
+
     def test_up_to_down_reversal_is_first_sell(self):
         signal = signal_for_history(frame([8, 9, 10, 7]))
         self.assertEqual(signal['signal_code'], 'SELL1')

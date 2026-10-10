@@ -15,6 +15,10 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(payload_schema_current({'payload_schema_version': PAYLOAD_SCHEMA_VERSION - 1}))
         self.assertTrue(payload_schema_current({'payload_schema_version': PAYLOAD_SCHEMA_VERSION}))
 
+    def test_signal_context_change_invalidates_old_cache_versions(self):
+        self.assertFalse(payload_schema_current({'payload_schema_version': 4}))
+        self.assertFalse(chart_schema_current({'chart_schema_version': 3}))
+
     def test_holding_summaries_are_date_checked_and_keyed_by_logical_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

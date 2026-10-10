@@ -32,6 +32,24 @@ def _clean_history(history):
     return data.dropna(subset=['open', 'high', 'low', 'close']).sort_values('trade_date')
 
 
+def _trend_context(code, side, index, closes):
+    if code not in {'BUY1', 'SELL1'}:
+        return None, None
+    series = pd.Series(closes[:index + 1], dtype='float64')
+    ema = series.ewm(span=20, adjust=False).mean()
+    current_close = float(series.iloc[-1])
+    current_ema = float(ema.iloc[-1])
+    slope_index = max(0, len(ema) - 6)
+    ema_slope = current_ema - float(ema.iloc[slope_index])
+    if side == 'long':
+        if current_close < current_ema or ema_slope < 0:
+            return 'downtrend_rebound', '下跌趋势反弹一买'
+        return 'cycle_reversal', '大周期反转一买'
+    if current_close > current_ema or ema_slope > 0:
+        return 'uptrend_pullback', '上涨趋势回落一卖'
+    return 'cycle_reversal', '大周期反转一卖'
+
+
 def signal_series(history):
     """Return per-bar futures signals from the source indicator's trend-state chain.
 
@@ -43,6 +61,7 @@ def signal_series(history):
     if data.empty:
         return []
     rows = data.to_dict('records')
+    closes = [float(row['close']) for row in rows]
     output, previous_state = [], None
     for index, row in enumerate(rows):
         close = float(row['close'])
@@ -74,11 +93,14 @@ def signal_series(history):
             code, label, side = 'HOLD_SHORT', '持空', 'short'
         else:
             code, label, side = 'WAIT', '等待', 'neutral'
+        context, context_label = _trend_context(code, side, index, closes)
         output.append(dict(
             trade_date=row['trade_date'],
             signal_code=code,
             signal_label=label,
             signal_side=side,
+            signal_context=context,
+            signal_context_label=context_label,
             close=close,
         ))
     return output
@@ -103,6 +125,7 @@ def signal_for_history(history):
 
 def chart_signals(history):
     return [dict(trade_date=row['trade_date'], code=row['signal_code'], label=row['signal_label'],
-                 side=row['signal_side'], close=row['close'])
+                 side=row['signal_side'], context=row.get('signal_context'),
+                 context_label=row.get('signal_context_label'), close=row['close'])
             for row in signal_series(history)
             if row['signal_code'] in {'BUY1', 'BUY2', 'SELL1', 'SELL2'}]

@@ -135,7 +135,7 @@ export function renderChart(container,input,{window=60,price=false,priceLabel='�
  draw();const observer=new ResizeObserver(draw);observer.observe(surface);observers.set(container,observer);
 }
 
-export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[],measuredMoves=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange,wheelMode='zoom',onNavigate,fitHeight=false}={}){
+export function renderCandlestickChart(container,{candles=[],moving={},signals=[],levels=[],measuredMoves=[],mlSignals=[]},{window=80,title='K线图',interactive=false,activity=true,onLevelChange,wheelMode='zoom',onNavigate,fitHeight=false}={}){
  observers.get(container)?.disconnect();container.replaceChildren();
  const allRows=candles.filter(row=>row.length>=5&&row.slice(1,5).every(Number.isFinite));
  if(allRows.length<2){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无可展示的K线';container.appendChild(empty);return null}
@@ -158,6 +158,11 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
    const mmKey=document.createElement('span');mmKey.className='chart-key mm-key';
    const swatch=document.createElement('i');swatch.className='mm-swatch';
    mmKey.append(swatch,document.createTextNode('Measured Move 目标位'));legend.appendChild(mmKey);
+  }
+  if(mlSignals&&mlSignals.length){
+   const mlKey=document.createElement('span');mlKey.className='chart-key ml-key';
+   const swatch=document.createElement('i');swatch.className='ml-swatch';
+   mlKey.append(swatch,document.createTextNode('ML周期 / 胜率'));legend.appendChild(mlKey);
   }
  for(const level of priceLevels){
   const key=document.createElement('span');key.className=`chart-key level-${level.kind}`;key.dataset.levelLegend=level.id;const swatch=document.createElement('i');key.append(swatch,document.createTextNode(`${level.label} ${level.value.toFixed(2)}`));legend.appendChild(key);
@@ -183,16 +188,21 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
   const left=68,right=72,top=24,bottom=40,gap=28,activityH=activity?105:0,plotH=height-top-bottom-activityH-(activity?gap:0),activityTop=top+plotH+gap,plotW=width-left-right;
   lastLayout={width,plotW,left};
   for(const level of priceLevels){const item=legend.querySelector(`[data-level-legend="${level.id}"]`);if(item)item.lastChild.textContent=`${level.label} ${level.value.toFixed(2)}`}
-  const visibleDates=new Set(rows.map(row=>row[0])),visibleSignals=signals.filter(signal=>visibleDates.has(signal.trade_date));
+  const visibleDates=new Set(rows.map(row=>row[0])),visibleSignals=signals.filter(signal=>visibleDates.has(signal.trade_date)),visibleMlSignals=(mlSignals||[]).filter(signal=>visibleDates.has(signal.trade_date));
   const signalsByDate=new Map();
   for(const signal of visibleSignals){
    const list=signalsByDate.get(signal.trade_date)||[];
    list.push(signal);signalsByDate.set(signal.trade_date,list);
   }
+  const mlSignalsByDate=new Map();
+  for(const signal of visibleMlSignals){
+   const list=mlSignalsByDate.get(signal.trade_date)||[];
+   list.push(signal);mlSignalsByDate.set(signal.trade_date,list);
+  }
   // 只保留 A/B/C 三点都在可见窗口内的 measured move
   const visibleMoves=(measuredMoves||[]).map(mm=>({...mm,aIdx:rows.findIndex(row=>row[0]===mm.leg1_start_date),bIdx:rows.findIndex(row=>row[0]===mm.leg1_end_date),cIdx:rows.findIndex(row=>row[0]===mm.pullback_end_date)})).filter(mm=>mm.aIdx>=0&&mm.bIdx>=0&&mm.cIdx>=0);
   const overlaySeries=overlayDefinitions.map(item=>({...item,values:item.values.slice(range.start,range.start+range.count)}));
-  const basePrices=rows.flatMap(row=>[row[2],row[3]]).concat(overlaySeries.flatMap(item=>item.values.filter(Number.isFinite))).concat(visibleSignals.map(s=>s.close).filter(Number.isFinite));
+  const basePrices=rows.flatMap(row=>[row[2],row[3]]).concat(overlaySeries.flatMap(item=>item.values.filter(Number.isFinite))).concat(visibleSignals.map(s=>s.close).filter(Number.isFinite)).concat(visibleMlSignals.map(s=>s.close).filter(Number.isFinite));
   const rawLow=Math.min(...basePrices),rawHigh=Math.max(...basePrices),rawSpan=Math.max(rawHigh-rawLow,1);
   const nearbyLevels=priceLevels.map(level=>level.value).filter(value=>value>=rawLow-rawSpan*.2&&value<=rawHigh+rawSpan*.2);
   const nearbyTargets=visibleMoves.map(mm=>Number(mm.target_price)).filter(value=>Number.isFinite(value)&&value>=rawLow-rawSpan*.2&&value<=rawHigh+rawSpan*.2);
@@ -254,6 +264,13 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
    const isLong=signal.side==='long',px=x(index),py=y(signal.close)+(isLong?16:-12),label=element('text',{x:px,y:py,'text-anchor':'middle','class':`kline-signal ${isLong?'long':'short'}`},signal.label);
    svg.append(element('circle',{cx:px,cy:y(signal.close),r:4,fill:isLong?'#cb524a':'#24846b'}));svg.append(label);
   });
+  visibleMlSignals.forEach(signal=>{
+   const index=rows.findIndex(row=>row[0]===signal.trade_date);if(index<0||!Number.isFinite(Number(signal.close)))return;
+   const px=x(index),py=y(Number(signal.close)),isLong=signal.side==='long',color=isLong?'#7c3aed':signal.side==='short'?'#0f766e':'#64748b';
+   const points=`${px},${py-7} ${px+7},${py} ${px},${py+7} ${px-7},${py}`;
+   svg.append(element('polygon',{points,fill:'#fff',stroke:color,'stroke-width':1.6,'data-ml-signal':''}));
+   svg.append(element('text',{x:px,y:py-10,'text-anchor':'middle','class':'ml-signal-label',fill:color},signal.label||'ML'));
+  });
   const levelHandles=[];
   for(const level of priceLevels){
    if(level.value<lo||level.value>hi)continue;
@@ -298,7 +315,20 @@ export function renderCandlestickChart(container,{candles=[],moving={},signals=[
    [['开',row[1]],['高',row[2]],['低',row[3]],['收',row[4]],['成交量',row[5]],['持仓量',row[6]]].forEach(([label,value])=>{const item=document.createElement('div'),l=document.createElement('span'),v=document.createElement('span');l.textContent=label;v.textContent=Number.isFinite(value)?(label.length>1?Math.round(value).toLocaleString('zh-CN'):value.toFixed(2)):'—';item.append(l,v);tip.appendChild(item)});
    for(const signal of signalsByDate.get(row[0])||[]){
     const item=document.createElement('div'),l=document.createElement('span'),v=document.createElement('span');
-    l.textContent='价格行为';v.textContent=`${signal.label}${signal.detail?' · '+signal.detail:''}`;item.append(l,v);tip.appendChild(item);
+    const label=signal.context_label||signal.label;
+    l.textContent='价格行为';v.textContent=`${label}${signal.detail?' · '+signal.detail:''}`;item.append(l,v);tip.appendChild(item);
+   }
+   for(const signal of mlSignalsByDate.get(row[0])||[]){
+    const rows=[
+     ['ML周期',`${signal.market_cycle_label||signal.market_cycle_phase||'—'} · ${signal.signal_bar_label||signal.signal_bar||'—'}`],
+     ['策略',signal.strategy||'—'],
+     ['胜率 / R',`${Number.isFinite(signal.win_rate)?(signal.win_rate*100).toFixed(1)+'%':'—'} / ${Number.isFinite(signal.avg_r)?(signal.avg_r>=0?'+':'')+signal.avg_r.toFixed(3):'—'}`],
+     ['样本',Number.isFinite(signal.samples)?String(signal.samples):'—'],
+    ];
+    for(const [label,value] of rows){
+     const item=document.createElement('div'),l=document.createElement('span'),v=document.createElement('span');
+     l.textContent=label;v.textContent=value;item.append(l,v);tip.appendChild(item);
+    }
    }
    tip.hidden=false;tip.style.left=`${Math.max(0,Math.min(width-tip.offsetWidth,gx+12))}px`;tip.style.top='32px';
   };

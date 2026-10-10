@@ -138,7 +138,9 @@ tr.opp-counter{opacity:.6}
 .mm-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border-radius:3px;background:#1e3a5f;color:#7dd3fc;font-size:10px;font-weight:700;line-height:1;vertical-align:middle;cursor:default}
 .detail-symbol .mm-badge{margin-left:4px}
 .chart-key.mm-key i.mm-swatch{border:0;width:14px;height:4px;border-radius:2px;background:#2563eb;opacity:.7}
+.chart-key.ml-key i.ml-swatch{border:1.5px solid #7c3aed;width:11px;height:11px;transform:rotate(45deg);border-radius:2px;background:#fff}
 .kline-svg .mm-target-label{font-size:10px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:2.5px}
+.kline-svg .ml-signal-label{font-size:9px;font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:3px;pointer-events:none}
 .kline-svg .mm-point-label{font-size:10px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:2.5px}
 .kline-modal{width:min(1320px,96vw);max-width:none;border:0;border-radius:10px;padding:0;background:#fff;color:inherit;box-shadow:0 24px 70px #15203340}
 .kline-modal::backdrop{background:rgba(28,37,51,.62);backdrop-filter:blur(2px)}

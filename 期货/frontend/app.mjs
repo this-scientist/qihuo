@@ -172,6 +172,11 @@ function statCards(){
 }
 function ema20Inline(row){const e=ema20Summary(row);return `<strong class="ema20-status ${e.tone}">${e.label}</strong><span class="contract">${e.direction}·${e.strength} / ${e.distance}</span>`}
 function ema20Assessment(row){const e=ema20Summary(row);return `<div class="ema20-assessment state-${e.status}"><div><span>EMA20判断</span><strong>${e.label}</strong></div><div><span>方向 / 强弱</span><strong>${e.direction} / ${e.strength}</strong></div><div><span>五日趋势</span><strong>${e.slope}</strong></div><div><span>当前距离</span><strong>${e.distance}</strong></div><p>${escapeHtml((row.ema20_actionability_reasons||[]).join('；')||e.reason)}</p></div>`}
+function technicalSignalText(row){
+ const label=row.signal_context_label||row.signal_label||'—';
+ const levels=row.today_support!=null&&row.today_resistance!=null?`支 ${fmt(row.today_support)} / 阻 ${fmt(row.today_resistance)}`:'—';
+ return {label,levels};
+}
 function decisionTable(source,limit=80,compact=false){
  const body=sortedRows(source).slice(0,limit).map(row=>`<tr data-code="${codeOf(row)}">
   <td><strong>${row.name}</strong><span class="contract">${row.main_code||codeOf(row)}</span>${hasMeasuredMove(row)?`<span class="mm-badge" title="${escapeHtml(measuredMoveTitle(row))}">M</span>`:''}</td>
@@ -188,7 +193,7 @@ function decisionTable(source,limit=80,compact=false){
   <td class="${sectorClass(row)}" data-sort="${row.sector_strength??''}" title="${row.sector_counter?'该品种方向与大类方向相反：负分代表反向强度，越负越强':''}">${signed(row.sector_strength)}<span class="contract">${sectorNote(row)}</span></td>
   <td class="${dirScore(row)>0?'up':dirScore(row)<0?'down':''}">${signed(row.dir_score)}</td>
   <td>${cycleLabel(row)}</td>
-  <td class="${signalClass(row)}">${row.signal_label||'—'}<span class="contract">${row.today_support!=null&&row.today_resistance!=null?`支 ${fmt(row.today_support)} / 阻 ${fmt(row.today_resistance)}`:'—'}</span></td>
+  <td class="${signalClass(row)}">${technicalSignalText(row).label}<span class="contract">${technicalSignalText(row).levels}</span></td>
   <td title="因子覆盖 ${fmt(row.burst_coverage)}%">${fmt(row.burst_score)}</td>
   <td>${count(row.main_oi)}</td><td>${count(row.pair_oi)}</td>
   <td class="${tone(row.oi_change5)}">${pct(row.oi_change5)}</td>
@@ -240,7 +245,8 @@ function renderCandidates(){
 }
 function metricBlocks(row){
  const ema=ema20Summary(row);
- const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',row.signal_label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['市场周期',cycleLabel(row)],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
+ const signal=technicalSignalText(row);
+ const items=[['趋势方向',directionText(row.decision_side)],['EMA20五日趋势',ema.slope],['价格距EMA20',ema.distance],['技术信号',signal.label],['今日支撑 / 阻力',`${fmt(row.today_support)} / ${fmt(row.today_resistance)}`],['明日突破 / 反转',`${fmt(row.tomorrow_breakout)} / ${fmt(row.tomorrow_reversal)}`],['商品结构',directionText(row.structure_direction)],['趋势 / 结构',structureText(row.structure_confirm)],['所属大类',row.sector],['趋势得分',signed(row.dir_score)],['市场周期',cycleLabel(row)],['当日涨幅（昨结）',pct(row.day_change)],['1日涨幅（昨收）',pct(row.return1)],['5日涨幅',pct(row.return5)],['20日涨幅',pct(row.return20)],['RPS5',fmt(row.rps5)],['RPS20',fmt(row.rps20)],['RPS加速度（百分点）',signed(row.rps_accel)],['大类内相对强度',signed(row.sector_strength)],['爆发指数',fmt(row.burst_score)],['爆发因子覆盖',`${fmt(row.burst_coverage)}%`],['ADX',fmt(row.adx)]];
  return `<div class="detail-metrics">${items.map(([label,value])=>`<div><span>${label}</span><strong>${value||'—'}</strong></div>`).join('')}<div class="quote-metrics" data-intraday="${contractOf(row)}">${quoteMetrics(row)}${execMetrics(row)}</div></div>`;
 }
 const detailStatusLabel=row=>({actionable:'可做',wait_pullback:'等回踩',do_not_chase:'不可追',not_actionable:'不可做'}[row.ema20_actionability]||'不可做');
@@ -547,7 +553,7 @@ function chartLevels(row){
  ];
 }
 function chartInput(row){
- return {candles:data.candles[codeOf(row)]||[],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[],levels:chartLevels(row),measuredMoves:data.measured_moves?.[codeOf(row)]?.moves||[]};
+ return {candles:data.candles[codeOf(row)]||[],moving:data.moving?.[codeOf(row)]||{},signals:data.technical_signals?.[codeOf(row)]||[],levels:chartLevels(row),measuredMoves:data.measured_moves?.[codeOf(row)]?.moves||[],mlSignals:data.ml_price_action?.[codeOf(row)]||[]};
 }
 function saveManualLevels(row,levels){
  state.manualLevels[codeOf(row)]=Object.fromEntries(levels.map(level=>[level.id,level.value]));
