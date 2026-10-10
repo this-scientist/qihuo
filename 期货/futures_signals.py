@@ -3,6 +3,8 @@ import math
 
 import pandas as pd
 
+from price_action import price_action_summary
+
 
 def _finite(value):
     try:
@@ -117,6 +119,11 @@ def signal_for_history(history):
                        for key, value in _pivot(data.iloc[-2]).items()
                        if key in {'tomorrow_resistance', 'tomorrow_support'}})
     latest.update(_pivot(data.iloc[-1]))
+    price_action = price_action_summary(data)
+    latest['price_action'] = price_action
+    for key in ['structure_side', 'lifecycle', 'event_type', 'trade_model',
+                'structure_rr', 'eligible_for_option_eval']:
+        latest[key] = price_action.get(key)
     for key, value in list(latest.items()):
         if isinstance(value, float) and not _finite(value):
             latest[key] = None

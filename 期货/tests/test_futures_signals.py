@@ -4,15 +4,18 @@ import pandas as pd
 from futures_signals import signal_for_history
 
 
-def frame(closes):
+def frame(closes, close_on_high=False):
     rows = []
     for index, close in enumerate(closes, start=1):
+        high = float(close) if close_on_high else float(close) + 1
+        low = float(close) - 2 if close_on_high else float(close) - 1
         rows.append(dict(
             trade_date=f'202609{index:02d}',
             open=float(close) - 0.5,
-            high=float(close) + 1,
-            low=float(close) - 1,
+            high=high,
+            low=low,
             close=float(close),
+            vol=1000 + index,
         ))
     return pd.DataFrame(rows)
 
@@ -62,6 +65,15 @@ class FuturesSignalTests(unittest.TestCase):
         self.assertAlmostEqual(signal['today_support'], 6.8)
         self.assertAlmostEqual(signal['tomorrow_breakout'], 12.9)
         self.assertAlmostEqual(signal['tomorrow_reversal'], 8.9)
+
+    def test_signal_exposes_price_action_summary(self):
+        signal = signal_for_history(frame([100.0] * 60 + [103.0], close_on_high=True))
+        self.assertIn('price_action', signal)
+        self.assertEqual(signal['price_action']['event_type'], 'breakout')
+        self.assertEqual(signal['price_action']['trade_model'], 'A')
+        self.assertEqual(signal['structure_side'], 'bullish')
+        self.assertEqual(signal['event_type'], 'breakout')
+        self.assertTrue(signal['eligible_for_option_eval'])
 
 
 if __name__ == '__main__':

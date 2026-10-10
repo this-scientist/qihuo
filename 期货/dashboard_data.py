@@ -15,7 +15,7 @@ from futures_signals import chart_signals, signal_for_history
 from measured_move import measured_move_summary
 
 CHART_SCHEMA_VERSION = 4
-PAYLOAD_SCHEMA_VERSION = 5
+PAYLOAD_SCHEMA_VERSION = 6
 SECTORS = json.loads(Path(__file__).with_name('sectors.json').read_text(encoding='utf-8'))
 PERCENT_FIELDS = {'return1','return5','return20','return60','return120','atr_change5','oi_change5','oi_change20',
     'main_oi_change5','main_oi_change20','secondary_oi_change5','secondary_oi_change20',
