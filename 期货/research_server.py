@@ -395,11 +395,23 @@ def main():
             super().end_headers()
         def respond(self,value,status=200):
             payload=json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8');self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+        def respond_blob(self,blob,headers,status=200):
+            self.send_response(status)
+            for key,value in headers.items():self.send_header(key,value)
+            self.send_header('Content-Length',str(len(blob)))
+            self.end_headers();self.wfile.write(blob)
         def do_GET(self):
             parsed=urlparse(self.path);params=parse_qs(parsed.query)
             try:
                 asof=valid_date(params['asof'][0]) if 'asof' in params else store.active
                 if parsed.path=='/api/data':self.respond(store.get(asof))
+                elif parsed.path=='/api/export/ai-excel':
+                    from ai_excel_export import build_ai_excel, workbook_response_headers
+                    from option_scanner import build_scanner
+                    payload=store.get(asof)
+                    options=store.option_payload(asof)
+                    scanner=build_scanner(payload,options,min(max(int(params.get('top',['5'])[0]),1),10))
+                    self.respond_blob(build_ai_excel(payload,options,scanner),workbook_response_headers(asof))
                 elif parsed.path=='/api/quotes':
                     # 盘中报价只读旁路：绝不写入 payload、MySQL 或快照，收盘口径的可复现性不受影响
                     from realtime import snapshot
