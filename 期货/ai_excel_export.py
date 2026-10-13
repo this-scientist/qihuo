@@ -40,7 +40,11 @@ def build_ai_excel(payload: dict, option_payload: dict | None = None,
         ('席位持仓', _holding_rows(payload)),
         ('期权链', _option_rows(option_payload)),
         ('期权机会', _opportunity_rows(scanner_payload)),
-        ('图表序列', _chart_rows(payload)),
+        ('日线行情', _daily_rows(payload)),
+        ('技术信号日线', _technical_signal_rows(payload)),
+        ('量度走势', _measured_move_rows(payload)),
+        ('ML价格行为', _ml_price_action_rows(payload)),
+        ('大类指数日线', _sector_index_rows(payload)),
         ('数据质量', _quality_rows(payload)),
     ]
     return _xlsx(sheets)
@@ -168,7 +172,7 @@ def _opportunity_rows(scanner_payload: dict) -> list[list[object]]:
     return rows
 
 
-def _chart_rows(payload: dict) -> list[list[object]]:
+def _daily_rows(payload: dict) -> list[list[object]]:
     rows = [['品种代码', '日期', '开盘', '最高', '最低', '收盘', '成交量', '持仓量', 'EMA20']]
     moving = payload.get('moving') or {}
     for code, candles in (payload.get('candles') or {}).items():
@@ -176,6 +180,62 @@ def _chart_rows(payload: dict) -> list[list[object]]:
         for index, candle in enumerate(candles):
             values = list(candle) + [None] * (7 - len(candle))
             rows.append([code] + values[:7] + [ema[index] if index < len(ema) else None])
+    return rows
+
+
+def _technical_signal_rows(payload: dict) -> list[list[object]]:
+    rows = [['品种代码', '日期', '信号', '方向', '价格', '标签', '说明']]
+    for code, signals in (payload.get('technical_signals') or {}).items():
+        for item in signals or []:
+            rows.append([
+                code, item.get('trade_date') or item.get('date'), item.get('signal') or item.get('type'),
+                item.get('side') or item.get('direction'), item.get('price'),
+                item.get('label'), item.get('note') or item.get('reason'),
+            ])
+    return rows
+
+
+def _measured_move_rows(payload: dict) -> list[list[object]]:
+    rows = [['品种代码', '字段', '值']]
+    for code, value in (payload.get('measured_moves') or {}).items():
+        if isinstance(value, dict):
+            for key, item in value.items():
+                rows.append([code, key, item])
+        elif isinstance(value, list):
+            for index, item in enumerate(value, 1):
+                if isinstance(item, dict):
+                    for key, entry in item.items():
+                        rows.append([code, f'{index}.{key}', entry])
+                else:
+                    rows.append([code, index, item])
+        else:
+            rows.append([code, 'value', value])
+    return rows
+
+
+def _ml_price_action_rows(payload: dict) -> list[list[object]]:
+    columns = [
+        ('trade_date', '日期'), ('close', '收盘'), ('side', '方向'),
+        ('label', '短标签'), ('market_cycle_phase', '市场周期阶段'),
+        ('market_cycle_label', '周期标签'), ('signal_bar', '信号K'),
+        ('signal_bar_label', '信号K中文'), ('strategy', '策略'),
+        ('samples', '样本数'), ('win_rate', '胜率'), ('avg_r', '平均R'),
+        ('median_r', '中位R'),
+    ]
+    rows = [['品种代码'] + [label for _, label in columns]]
+    for code, annotations in (payload.get('ml_price_action') or {}).items():
+        for item in annotations or []:
+            rows.append([code] + [_dig(item, key) for key, _ in columns])
+    return rows
+
+
+def _sector_index_rows(payload: dict) -> list[list[object]]:
+    rows = [['大类', '日期', '等权指数', '成员数', '成员']]
+    for name, group in (payload.get('sectors') or {}).items():
+        members = group.get('members') or []
+        member_text = ','.join(members)
+        for day, value in group.get('values') or []:
+            rows.append([name, day, value, group.get('count'), member_text])
     return rows
 
 

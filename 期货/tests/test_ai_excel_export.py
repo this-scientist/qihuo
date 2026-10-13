@@ -4,7 +4,6 @@ import sys
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -69,6 +68,21 @@ PAYLOAD = {
     }],
     'candles': {'M.DCE': [['20260923', 3000, 3120, 2980, 3100, 20000, 100000]]},
     'moving': {'M.DCE': {'ema20': [3010]}},
+    'technical_signals': {'M.DCE': [
+        {'trade_date': '20260923', 'signal': 'BOS_UP', 'side': 'long', 'price': 3100,
+         'label': '向上突破结构'},
+    ]},
+    'measured_moves': {'M.DCE': {
+        'asof': '20260924', 'direction': 'long', 'anchor_date': '20260920',
+        'target': 3300, 'stop': 2980, 'rr': 1.8,
+    }},
+    'ml_price_action': {'M.DCE': [{
+        'trade_date': '20260923', 'close': 3100, 'side': 'long',
+        'market_cycle_phase': 'BREAKOUT_ATTEMPT', 'signal_bar_label': '多头趋势K',
+        'strategy': 'BO', 'samples': 22, 'win_rate': 0.58, 'avg_r': 0.7,
+    }]},
+    'sectors': {'农产品': {'members': ['M.DCE'], 'count': 1,
+                     'values': [['20260922', 99.5], ['20260923', 100.0]]}},
 }
 
 OPTIONS = {
@@ -98,18 +112,31 @@ class AiExcelExportTests(unittest.TestCase):
         blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
         names = sheet_names(blob)
         for title in ['说明', '品种总览', '决策信号', '技术因子', '期限结构',
-                      '席位持仓', '期权链', '期权机会', '图表序列', '数据质量']:
+                      '席位持仓', '期权链', '期权机会', '日线行情',
+                      '技术信号日线', '量度走势', 'ML价格行为', '大类指数日线', '数据质量']:
             self.assertIn(title, names)
         text = workbook_text(blob)
         self.assertIn('20日涨跌幅', text)
         self.assertIn('豆粕', text)
         self.assertIn('M2701C3200.DCE', text)
+        self.assertIn('向上突破结构', text)
+        self.assertIn('BREAKOUT_ATTEMPT', text)
+        self.assertIn('农产品', text)
 
     def test_missing_values_stay_blank_instead_of_zero(self):
         blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
         text = workbook_text(blob)
         self.assertIn('ATR14', text)
         self.assertNotIn('None', text)
+
+    def test_daily_sheet_carries_ohlc_volume_oi_and_ema20(self):
+        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
+        text = workbook_text(blob)
+        for label in ['品种代码', '日期', '开盘', '最高', '最低', '收盘',
+                      '成交量', '持仓量', 'EMA20']:
+            self.assertIn(label, text)
+        for value in ['20260923', '3000', '3120', '2980', '3100', '20000', '100000', '3010']:
+            self.assertIn(value, text)
 
     def test_download_headers_are_excel_specific(self):
         headers = workbook_response_headers('20260924')
