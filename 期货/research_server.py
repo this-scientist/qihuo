@@ -102,6 +102,37 @@ def real_levels(root,code,main_code):
         if len(subset):frame=subset
     return compute_levels(frame,main_code=main_code)
 
+def real_daily_export(root,asof,payload,window=65):
+    """真实主次合约未复权日线，供AI Excel与盘面价格核对。"""
+    try:
+        source=snapshot_source(root,asof)
+    except DataError:
+        source=Path(root)
+    output={}
+    for row in payload.get('records') or []:
+        code=row.get('ts_code')
+        if not code:
+            continue
+        path=source/f'processed/pair_history/{code.replace(".","_")}.csv'
+        if not path.exists():
+            output[code]=[]
+            continue
+        try:
+            frame=read_csv(path).sort_values(['trade_date','role','ts_code'])
+        except (OSError,ValueError):
+            output[code]=[]
+            continue
+        if 'trade_date' in frame:
+            frame=frame[frame.trade_date.astype(str).le(asof)]
+        keep=[column for column in ['ts_code','trade_date','role','main_code','open','high','low','close',
+            'settle','vol','oi','pre_close','pre_settle','oi_chg','exchange'] if column in frame.columns]
+        if 'role' in frame:
+            frame=frame.groupby('role',group_keys=False).tail(window)
+        else:
+            frame=frame.tail(window)
+        output[code]=frame[keep].to_dict('records')
+    return output
+
 def ai_context(store,asof,view,levels):
     """组装喂给大模型的"事实"上下文：技术面 + 商品结构 + 期权 + 本地价位，缺失项显式标注。"""
     cand=view['candidate'];metrics=cand.get('metrics') or {}
@@ -411,7 +442,8 @@ def main():
                     payload=store.get(asof)
                     options=store.option_payload(asof)
                     scanner=build_scanner(payload,options,min(max(int(params.get('top',['5'])[0]),1),10))
-                    self.respond_blob(build_ai_excel(payload,options,scanner),workbook_response_headers(asof))
+                    self.respond_blob(build_ai_excel(payload,options,scanner,
+                        real_daily_export(store.root,asof,payload)),workbook_response_headers(asof))
                 elif parsed.path=='/api/quotes':
                     # 盘中报价只读旁路：绝不写入 payload、MySQL 或快照，收盘口径的可复现性不受影响
                     from realtime import snapshot

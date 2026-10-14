@@ -28,9 +28,11 @@ def workbook_response_headers(asof: str) -> dict[str, str]:
 
 
 def build_ai_excel(payload: dict, option_payload: dict | None = None,
-                   scanner_payload: dict | None = None) -> bytes:
+                   scanner_payload: dict | None = None,
+                   real_daily: dict | None = None) -> bytes:
     option_payload = option_payload or {}
     scanner_payload = scanner_payload or {}
+    real_daily = real_daily or {}
     sheets = [
         ('说明', _overview_rows(payload)),
         ('品种总览', _commodity_rows(payload)),
@@ -40,7 +42,8 @@ def build_ai_excel(payload: dict, option_payload: dict | None = None,
         ('席位持仓', _holding_rows(payload)),
         ('期权链', _option_rows(option_payload)),
         ('期权机会', _opportunity_rows(scanner_payload)),
-        ('日线行情', _daily_rows(payload)),
+        ('复权主连日线', _daily_rows(payload)),
+        ('真实主次合约日线', _real_daily_rows(real_daily)),
         ('技术信号日线', _technical_signal_rows(payload)),
         ('量度走势', _measured_move_rows(payload)),
         ('ML价格行为', _ml_price_action_rows(payload)),
@@ -180,6 +183,20 @@ def _daily_rows(payload: dict) -> list[list[object]]:
         for index, candle in enumerate(candles):
             values = list(candle) + [None] * (7 - len(candle))
             rows.append([code] + values[:7] + [ema[index] if index < len(ema) else None])
+    return rows
+
+
+def _real_daily_rows(real_daily: dict) -> list[list[object]]:
+    rows = [['品种代码', '合约代码', '角色', '日期', '开盘', '最高', '最低', '收盘',
+             '结算价', '成交量', '持仓量', '昨收', '昨结', '持仓变化']]
+    for code, records in real_daily.items():
+        for item in records or []:
+            rows.append([
+                code, item.get('ts_code'), item.get('role'), item.get('trade_date'),
+                item.get('open'), item.get('high'), item.get('low'), item.get('close'),
+                item.get('settle'), item.get('vol'), item.get('oi'),
+                item.get('pre_close'), item.get('pre_settle'), item.get('oi_chg'),
+            ])
     return rows
 
 

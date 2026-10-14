@@ -106,13 +106,25 @@ SCANNER = {
     'short': [],
 }
 
+REAL_DAILY = {
+    'M.DCE': [{
+        'ts_code': 'M2701.DCE', 'trade_date': '20260923', 'role': 'main',
+        'main_code': 'M.DCE', 'open': 3200, 'high': 3250, 'low': 3180,
+        'close': 3230, 'settle': 3220, 'vol': 30000, 'oi': 120000,
+    }, {
+        'ts_code': 'M2705.DCE', 'trade_date': '20260923', 'role': 'secondary',
+        'main_code': 'M.DCE', 'open': 3150, 'high': 3190, 'low': 3120,
+        'close': 3160, 'settle': 3155, 'vol': 8000, 'oi': 50000,
+    }],
+}
+
 
 class AiExcelExportTests(unittest.TestCase):
     def test_workbook_contains_model_ready_sheets_and_chinese_labels(self):
-        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
+        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER, REAL_DAILY)
         names = sheet_names(blob)
         for title in ['说明', '品种总览', '决策信号', '技术因子', '期限结构',
-                      '席位持仓', '期权链', '期权机会', '日线行情',
+                      '席位持仓', '期权链', '期权机会', '复权主连日线', '真实主次合约日线',
                       '技术信号日线', '量度走势', 'ML价格行为', '大类指数日线', '数据质量']:
             self.assertIn(title, names)
         text = workbook_text(blob)
@@ -124,18 +136,26 @@ class AiExcelExportTests(unittest.TestCase):
         self.assertIn('农产品', text)
 
     def test_missing_values_stay_blank_instead_of_zero(self):
-        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
+        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER, REAL_DAILY)
         text = workbook_text(blob)
         self.assertIn('ATR14', text)
         self.assertNotIn('None', text)
 
     def test_daily_sheet_carries_ohlc_volume_oi_and_ema20(self):
-        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER)
+        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER, REAL_DAILY)
         text = workbook_text(blob)
         for label in ['品种代码', '日期', '开盘', '最高', '最低', '收盘',
                       '成交量', '持仓量', 'EMA20']:
             self.assertIn(label, text)
         for value in ['20260923', '3000', '3120', '2980', '3100', '20000', '100000', '3010']:
+            self.assertIn(value, text)
+
+    def test_real_daily_sheet_carries_unadjusted_main_and_secondary_prices(self):
+        blob = build_ai_excel(PAYLOAD, OPTIONS, SCANNER, REAL_DAILY)
+        text = workbook_text(blob)
+        self.assertIn('真实主次合约日线', sheet_names(blob))
+        for value in ['M2701.DCE', 'M2705.DCE', 'main', 'secondary', '3230', '3160',
+                      '120000', '50000']:
             self.assertIn(value, text)
 
     def test_download_headers_are_excel_specific(self):
