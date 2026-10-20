@@ -3,7 +3,7 @@ import argparse
 import hashlib
 import json
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 from collector import DataError, required, unique, read_csv, atomic_csv, atomic_json, SUFFIX
@@ -32,7 +32,7 @@ def paged_query(collector,name,params,path,cap=1000,force=False):
 def fetch_options(root,asof,force=False,progress=None,selected_root=None):
     root=Path(root);c=make_collector(root=root);c.retries=1
     selected=read_csv(Path(selected_root or root)/f'raw/selected/{asof}.csv');required(selected,['ts_code','close','exchange','main_code','role'])
-    metadata=[];records=[];coverage=[];failures=[];units={};basic_refs={}
+    metadata=[];records=[];coverage=[];failures=[];units={};basic_refs={};move_history_failures=[]
     units_path=root/'raw/reference/quote_units.json'
     if units_path.exists():units=json.loads(units_path.read_text(encoding='utf-8'))
     for exchange,group in selected.groupby('exchange'):
@@ -44,6 +44,20 @@ def fetch_options(root,asof,force=False,progress=None,selected_root=None):
             for key in ['close','vol','oi']:
                 daily[key]=pd.to_numeric(daily[key],errors='coerce')
                 if not daily[key].map(lambda v:pd.notna(v) and math.isfinite(v) and v>=0).all():raise DataError('Invalid option quote numeric value')
+            # Cache the last five sessions for observed close-to-close move annotations.
+            try:
+                start=(datetime.strptime(asof,'%Y%m%d')-timedelta(days=40)).strftime('%Y%m%d')
+                dates=sorted(c.calendar(exchange,start,asof))[-5:]
+                for date in dates:
+                    if date==asof:continue
+                    try:
+                        history=paged_query(c,'opt_daily',dict(exchange=exchange,trade_date=date),root/f'raw/options/daily/{exchange}_{date}.csv',15000,force)
+                        required(history,['ts_code','trade_date','close'])
+                        if not history.trade_date.astype(str).eq(date).all():raise DataError('Wrong option history date')
+                    except DataError as exc:
+                        move_history_failures.append(dict(exchange=exchange,trade_date=date,reason=str(exc)))
+            except DataError as exc:
+                move_history_failures.append(dict(exchange=exchange,reason=str(exc)))
             quotes=daily.set_index('ts_code');matched_count=0
             for idx,row in enumerate(group.itertuples(),1):
                 message=f'Options {exchange} {idx}/{len(group)} {row.ts_code}';print(message,flush=True)
@@ -87,7 +101,7 @@ def fetch_options(root,asof,force=False,progress=None,selected_root=None):
     atomic_json(units,units_path)
     if metadata:atomic_csv(pd.concat(metadata,ignore_index=True),root/f'processed/options/{asof}/metadata.csv')
     atomic_csv(pd.DataFrame(records),root/f'processed/options/{asof}/chain.csv')
-    report=dict(asof=asof,records=records,coverage=coverage,failures=failures,success=bool(records) and not failures,
+    report=dict(asof=asof,records=records,coverage=coverage,failures=failures,move_history_failures=move_history_failures,success=bool(records) and not failures,
         limitations=['日线收盘不代表可执行买卖盘口；本页仅期权观察','Black76参考IV不是接口直接提供的IV；美式期权存在模型近似',
             '只覆盖当日已选主力/次主力合约对应期权；未下载全月份期权历史'])
     atomic_json(report,root/f'processed/options/{asof}/report.json')

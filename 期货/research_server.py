@@ -475,6 +475,9 @@ def main():
                 elif parsed.path=='/api/snapshots':self.respond(dict(active=store.active,snapshots=available_snapshots(store.root)))
                 elif parsed.path=='/api/jobs':self.respond(store.job)
                 elif parsed.path=='/api/options':self.respond(store.option_payload(asof,params.get('code',[None])[0],float(params.get('rate',[.02])[0])))
+                elif parsed.path=='/api/options/moves':
+                    from option_moves import build_option_moves
+                    self.respond(build_option_moves(store.root,store.get(asof),store.option_payload(asof)))
                 elif parsed.path=='/api/options/opportunities':
                     from option_scanner import build_opportunities
                     self.respond(build_opportunities(store.get(asof),store.option_payload(asof)))

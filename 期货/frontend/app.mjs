@@ -1,3 +1,4 @@
+import {buildPullbackLists} from './ema-pullback.mjs';
 import {renderChart,renderCandlestickChart} from './charts.mjs';
 import {api,asofQuery,mountToolbar,download} from './common.mjs';
 import {enableTableSorting} from './sortable.mjs';
@@ -11,6 +12,8 @@ const $=id=>document.getElementById(id);
 const app=$('app');
 const state={view:'market',selected:null,candidateTab:'START',optionMode:'default',optionContract:'auto',optionChain:null,search:'',detailSearch:'',sector:'all',side:'all',stage:'all',quotes:null,quoteMeta:null,execution:null,manualLevels:{},chartFrame:'daily'};
 let data;
+let optionMoves=null;
+let optionMovesError=null;
 let klineModalController=null;
 let klineRequest=0;
 let detailWheelAt=0;
@@ -18,7 +21,7 @@ const detailCollapsedGroups=new Set();
 
 const VIEW_TITLES={
  market:['COMMODITIES','商品总览',''],
- candidates:['CANDIDATES','候选池 / 启动榜','谁正在启动？'],
+ candidates:['CANDIDATES','候选池 / EMA20回撤','日线趋势与位置'],
  detail:['COMMODITY DETAIL','商品详情','为什么做它？'],
  options:['OPTION CHAIN','期权 T 型报价','具体买哪张？'],
  positions:['POSITION MONITOR','持仓监控','买完以后还对不对？'],
@@ -238,10 +241,19 @@ function renderMarket(){
  $('commodity-search').value=state.search;$('sector-filter').value=state.sector;$('side-filter').value=state.side;$('stage-filter').value=state.stage;
  renderSectorChart();
 }
+function optionMoveCell(row,side){
+ if(optionMovesError)return `<span class="muted" title="${escapeHtml(optionMovesError)}">期权数据读取失败</span>`;
+ if(!optionMoves)return '<span class="muted">正在读取期权异动…</span>';
+ const group=optionMoves.groups?.[row.code]?.[side==='long'?'C':'P'];
+ if(!group)return '<span class="muted">暂无近到期合约数据</span>';
+ const details=group.matches.map(item=>`${item.ts_code} · 剩${item.days_to_expiry}天 · ${fmt(item.multiple)}倍（+${fmt((item.multiple-1)*100)}%） · ${item.start_date}收盘${price(item.start_close)} → ${item.end_date}收盘${price(item.end_close)}`).join('；');
+ if(group.matches.length)return `<strong title="${escapeHtml(details)}">曾达${fmt(group.matches[0].multiple)}倍 · ${group.matches.length}张</strong><span class="contract">${escapeHtml(details)}</span>${group.status==='incomplete'?'<span class="muted small">部分历史缺失，仅列已验证异动</span>':''}`;
+ return group.status==='complete'?'未出现≥5倍':'历史数据不足';
+}
 function renderCandidates(){
- const tabs=['PREPARE','START','TREND'];
- const source=rows().filter(row=>row.state_v2===state.candidateTab);
- app.innerHTML=header()+`<section class="decision-panel"><div class="candidate-tabs">${tabs.map(tab=>`<button data-candidate-tab="${tab}" class="${state.candidateTab===tab?'active':''}">${stateText(tab)}<span>${rows().filter(row=>row.state_v2===tab).length}</span></button>`).join('')}</div>${decisionTable(source)}</section>`;
+ const lists=buildPullbackLists(data);
+ const section=(side,title)=>`<section class="decision-panel"><div class="section-heading"><h2>${title} <span class="queue-count">${lists[side].length}</span></h2></div><div class="table-wrap"><table class="decision-table"><thead><tr><th>品种 / 主力合约</th><th>复权收盘</th><th>EMA20</th><th>距离 ATR ↑</th><th>距离 %</th><th>回撤状态</th><th>EMA20方向</th><th>近到期期权异动</th></tr></thead><tbody>${lists[side].length?lists[side].map(row=>`<tr data-code="${escapeHtml(row.code)}"><td><strong>${escapeHtml(row.name||row.code)}</strong><span class="contract">${escapeHtml(row.main_code||row.code)}</span></td><td>${price(row.close)}</td><td>${price(row.ema20)}</td><td>${signed(row.distanceAtr)}</td><td>${pct(row.distancePct)}</td><td>${row.status}</td><td>${row.slope>0?'向上':'向下'}</td><td>${optionMoveCell(row,side)}</td></tr>`).join(''):'<tr><td colspan="8" class="empty">暂无符合趋势条件的品种</td></tr>'}</tbody></table></div></section>`;
+ app.innerHTML=header()+`<section class="decision-panel"><h2>日线 EMA20 回撤候选</h2><p>空头：EMA20 &lt; EMA60 且 EMA20 低于5个交易日前；多头反向。各列表按距离绝对值从近到远排列，保留正负号。</p><p class="muted small">距离 =（复权收盘 − EMA20）÷ ATR14；接近范围为 ±0.5 ATR。触线按当日高低价判断，触线后收回指收盘回到趋势一侧。采用收盘快照，不含盘中未确认信号。${lists.excluded} 个品种因趋势不符或数据不足未列入。</p><p class="muted small">价格及均线为复权连续口径，非主力合约实际报价；点击品种查看详情。期权异动：当前剩余1–15个自然日，多头看认购、空头看认沽；最近5个交易日内，同一合约较晚收盘 / 较早收盘 ≥5倍（涨幅≥400%），取最大倍数。属于历史价格异动，不是隐含波动率或未来收益预测。</p></section>`+section('short','空头趋势 · 等待反弹')+section('long','多头趋势 · 等待回撤');
 }
 function metricBlocks(row){
  const ema=ema20Summary(row);
@@ -727,6 +739,7 @@ async function init(){
   const oppLink=$('nav-opportunities');if(oppLink)oppLink.href='/opportunities.html'+(asofQuery()?'?'+asofQuery():'');
   await mountToolbar().catch(()=>{});
   render();
+  api('/api/options/moves'+(asofQuery()?'?'+asofQuery():'')).then(result=>{optionMoves=result;if(state.view==='candidates')render();}).catch(error=>{optionMovesError=error.message;if(state.view==='candidates')render();});
   await refreshQuotes();
   render();
   if(quoteTimer)clearInterval(quoteTimer);
